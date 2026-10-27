@@ -708,28 +708,30 @@ CREATE POLICY pol_anon_items_select ON rental_order_items FOR SELECT TO anon USI
 CREATE POLICY pol_anon_maintenance_select ON maintenance_records FOR SELECT TO anon USING (true);
 CREATE POLICY pol_anon_inspections_select ON equipment_inspections FOR SELECT TO anon USING (true);
 CREATE POLICY pol_anon_audit_select ON audit_logs FOR SELECT TO anon USING (true);
-CREATE POLICY pol_anon_profiles_select ON user_profiles FOR SELECT TO anon USING (true);
-CREATE POLICY pol_profiles_auth_insert ON user_profiles FOR INSERT TO authenticated, anon WITH CHECK (true);
-CREATE POLICY pol_profiles_auth_update ON user_profiles FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+REVOKE ALL ON TABLE public.user_profiles FROM anon, authenticated;
+GRANT SELECT ON TABLE public.user_profiles TO authenticated;
+GRANT UPDATE (full_name, phone, company_name, updated_at)
+    ON TABLE public.user_profiles TO authenticated;
+CREATE POLICY pol_profiles_auth_select ON user_profiles
+    FOR SELECT TO authenticated
+    USING (
+        auth_user_id = auth.uid()
+        OR id = auth.uid()
+        OR fn_current_user_role() IN ('admin', 'staff')
+    );
+CREATE POLICY pol_profiles_self_update ON user_profiles
+    FOR UPDATE TO authenticated
+    USING (auth_user_id = auth.uid() OR id = auth.uid())
+    WITH CHECK (auth_user_id = auth.uid() OR id = auth.uid());
 
 -- Trigger to automatically synchronize new Supabase Auth users to user_profiles
 CREATE OR REPLACE FUNCTION public.handle_new_auth_user()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth
+SET search_path = public, pg_temp
 AS $$
-DECLARE
-    v_role public.user_role_type;
 BEGIN
-    IF NEW.raw_user_meta_data->>'role' = 'admin' THEN
-        v_role := 'admin'::public.user_role_type;
-    ELSIF NEW.raw_user_meta_data->>'role' = 'staff' THEN
-        v_role := 'staff'::public.user_role_type;
-    ELSE
-        v_role := 'customer'::public.user_role_type;
-    END IF;
-
     INSERT INTO public.user_profiles (
         id, auth_user_id, full_name, email, phone, company_name, role, account_status
     ) VALUES (
@@ -739,14 +741,13 @@ BEGIN
         NEW.email,
         COALESCE(NEW.raw_user_meta_data->>'phone', '+1-555-0100'),
         COALESCE(NEW.raw_user_meta_data->>'company_name', 'Enterprise Client'),
-        v_role,
+        'customer',
         'active'
     )
     ON CONFLICT (email) DO UPDATE
-    SET auth_user_id = EXCLUDED.auth_user_id;
+    SET auth_user_id = EXCLUDED.auth_user_id,
+        updated_at = NOW();
 
-    RETURN NEW;
-EXCEPTION WHEN OTHERS THEN
     RETURN NEW;
 END;
 $$;

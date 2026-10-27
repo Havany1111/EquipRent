@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import type { UserProfile, UserRole } from '../types/database';
-import { loginWithEmail, signUpWithProfile } from '../services/authService';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { loginWithEmail, signUpWithProfile, isSupabaseConfigured } from '../lib/supabase';
 
 interface AuthScreenProps {
   onAuthenticated: (profile: UserProfile) => void;
@@ -23,23 +22,21 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
 
   const handleQuickFill = (role: UserRole) => {
     setSelectedRole(role);
+    setPassword('EquipRent2026!');
     if (role === 'customer') {
       setEmail('jordan.miller@buildcorp.com');
-      setPassword('EquipRent2026!');
       setFullName('Jordan Miller');
-      setPhone('+1-555-0103');
+      setPhone('+63 912 345 6789');
       setCompanyName('Apex Construction LLC');
     } else if (role === 'staff') {
       setEmail('marcus.tech@equiprent.com');
-      setPassword('EquipRent2026!');
       setFullName('Marcus Vance');
-      setPhone('+1-555-0102');
+      setPhone('+63 917 890 1234');
       setCompanyName('EquipRent Operations');
     } else {
       setEmail('admin@equiprent.com');
-      setPassword('EquipRent2026!');
       setFullName('Alex Morgan');
-      setPhone('+1-555-0101');
+      setPhone('+63 918 555 4321');
       setCompanyName('EquipRent Headquarters');
     }
     setErrorMsg('');
@@ -64,9 +61,8 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           email,
           password,
           fullName,
-          phone: phone || '+1-555-0199',
+          phone: phone || '+63 912 345 6789',
           companyName: companyName || 'Enterprise Partner',
-          role: selectedRole,
         });
 
         if (res.message) setInfoMsg(res.message);
@@ -75,8 +71,17 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Authentication failed';
       setErrorMsg(msg);
-      if (mode === 'login' && msg.toLowerCase().includes('account does not exist')) {
-        setInfoMsg('💡 Click "Create an account first" below to register this role in Supabase.');
+      if (mode === 'login') {
+        const normalizedMessage = msg.toLowerCase();
+        if (normalizedMessage.includes('database error querying schema')) {
+          setInfoMsg(
+            'Run supabase/fix_auth_and_seed_users.sql in your Supabase SQL Editor to repair demo accounts created by the old setup script, then try again.'
+          );
+        } else if (normalizedMessage.includes('invalid login credentials')) {
+          setInfoMsg(
+            'Check the email and password, or create a customer account. Staff and admin access must be provisioned by an administrator.'
+          );
+        }
       }
     } finally {
       setLoading(false);
@@ -93,49 +98,55 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             <span className="brand-name">Equip<span>Rent</span></span>
           </div>
           <h1 className="auth-finset-title">{mode === 'login' ? 'Welcome back!' : 'Create your account'}</h1>
-          <p className="auth-finset-sub">Select your operational tier to sign in or register with Supabase</p>
+          <p className="auth-finset-sub">
+            {mode === 'login'
+              ? 'Sign in to your EquipRent account'
+              : 'Create a customer account to get started'}
+          </p>
         </div>
 
         {/* ROLE SELECTION */}
-        <div style={{ marginBottom: 18 }}>
-          <div className="auth-roles-grid-finset">
-            <button
-              type="button"
-              className={`auth-role-card-finset ${selectedRole === 'customer' ? 'active' : ''}`}
-              onClick={() => {
-                setSelectedRole('customer');
-                setErrorMsg('');
-              }}
-            >
-              <strong>Customer</strong>
-              <small>Browse &amp; rent fleet</small>
-            </button>
+        {mode === 'login' && (
+          <div style={{ marginBottom: 18 }}>
+            <div className="auth-roles-grid-finset">
+              <button
+                type="button"
+                className={`auth-role-card-finset ${selectedRole === 'customer' ? 'active' : ''}`}
+                onClick={() => {
+                  setSelectedRole('customer');
+                  setErrorMsg('');
+                }}
+              >
+                <strong>Customer</strong>
+                <small>Browse &amp; rent fleet</small>
+              </button>
 
-            <button
-              type="button"
-              className={`auth-role-card-finset ${selectedRole === 'staff' ? 'active' : ''}`}
-              onClick={() => {
-                setSelectedRole('staff');
-                setErrorMsg('');
-              }}
-            >
-              <strong>Staff / Tech</strong>
-              <small>Dispatches &amp; checks</small>
-            </button>
+              <button
+                type="button"
+                className={`auth-role-card-finset ${selectedRole === 'staff' ? 'active' : ''}`}
+                onClick={() => {
+                  setSelectedRole('staff');
+                  setErrorMsg('');
+                }}
+              >
+                <strong>Staff / Tech</strong>
+                <small>Dispatches &amp; checks</small>
+              </button>
 
-            <button
-              type="button"
-              className={`auth-role-card-finset ${selectedRole === 'admin' ? 'active' : ''}`}
-              onClick={() => {
-                setSelectedRole('admin');
-                setErrorMsg('');
-              }}
-            >
-              <strong>Admin / DBA</strong>
-              <small>Audits &amp; stress tests</small>
-            </button>
+              <button
+                type="button"
+                className={`auth-role-card-finset ${selectedRole === 'admin' ? 'active' : ''}`}
+                onClick={() => {
+                  setSelectedRole('admin');
+                  setErrorMsg('');
+                }}
+              >
+                <strong>Admin / DBA</strong>
+                <small>Audits &amp; stress tests</small>
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* TABS */}
         <div className="auth-tabs-finset">
@@ -162,18 +173,20 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         </div>
 
         {/* QUICK FILL PRESETS */}
-        <div className="quick-presets-finset">
-          <span>Quick fill:</span>
-          <button type="button" className="quick-preset-chip" onClick={() => handleQuickFill('customer')}>
-            Jordan (Customer)
-          </button>
-          <button type="button" className="quick-preset-chip" onClick={() => handleQuickFill('staff')}>
-            Marcus (Staff)
-          </button>
-          <button type="button" className="quick-preset-chip" onClick={() => handleQuickFill('admin')}>
-            Alex (Admin)
-          </button>
-        </div>
+        {mode === 'login' && (
+          <div className="quick-presets-finset">
+            <span>Quick fill:</span>
+            <button type="button" className="quick-preset-chip" onClick={() => handleQuickFill('customer')}>
+              Jordan (Customer)
+            </button>
+            <button type="button" className="quick-preset-chip" onClick={() => handleQuickFill('staff')}>
+              Marcus (Staff)
+            </button>
+            <button type="button" className="quick-preset-chip" onClick={() => handleQuickFill('admin')}>
+              Alex (Admin)
+            </button>
+          </div>
+        )}
 
         {errorMsg && (
           <div style={{ padding: '10px 14px', borderRadius: 12, background: 'var(--red-bg)', color: 'var(--red-kpi)', fontSize: 12, fontWeight: 600, marginBottom: 14 }}>
@@ -251,7 +264,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             ) : mode === 'login' ? (
               `Sign In as ${selectedRole.toUpperCase()}`
             ) : (
-              `Create ${selectedRole.toUpperCase()} Account`
+              'Create Customer Account'
             )}
           </button>
         </form>
