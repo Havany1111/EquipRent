@@ -32,7 +32,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         if (profile.role !== selectedRole) {
           await logoutUser();
           throw new Error(
-            `This account is registered as ${profile.role}. Select that role to sign in.`
+            `This account is registered as ${profile.role}. Ask an administrator to update its role before signing in as ${selectedRole}.`
           );
         }
         onAuthenticated(profile);
@@ -50,8 +50,13 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           requestedRole: selectedRole,
         });
 
-        if (res.message) setInfoMsg(res.message);
-        onAuthenticated(res.profile);
+        if (res.profile) {
+          await logoutUser();
+        }
+        setMode('login');
+        setPassword('');
+        setSelectedRole('customer');
+        setInfoMsg(`${res.message} Please sign in.`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Authentication failed';
@@ -127,13 +132,13 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
 
         <form onSubmit={handleSubmit} className="auth-form-finset">
           <fieldset className="auth-role-picker">
-            <legend>{mode === 'login' ? 'Sign in as' : 'Request account role'}</legend>
+            <legend>{mode === 'login' ? 'Sign in as' : 'Request a role'}</legend>
             <div className="auth-roles-grid-finset">
               {([
-                ['customer', 'Customer', 'Browse and rent equipment'],
-                ['staff', 'Staff', 'Request staff access'],
-                ['admin', 'Admin', 'Request administrator access'],
-              ] as const).map(([role, label, description]) => (
+                ['customer', 'Customer'],
+                ['staff', 'Staff'],
+                ['admin', 'Admin'],
+              ] as const).map(([role, label]) => (
                 <button
                   key={role}
                   type="button"
@@ -142,17 +147,15 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                   onClick={() => setSelectedRole(role)}
                 >
                   <strong>{label}</strong>
-                  <small>{description}</small>
                 </button>
               ))}
             </div>
-
           </fieldset>
 
           {mode === 'signup' && (
             <>
               <div className="form-group">
-                <label>Full Legal Name</label>
+                <label>Full Name</label>
                 <input
                   type="text"
                   required
@@ -164,7 +167,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
 
               <div className="form-row">
                 <div className="form-group">
-                  <label>Contact Phone</label>
+                  <label>Phone</label>
                   <input
                     type="tel"
                     required
@@ -178,7 +181,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Company / Organization</label>
+                  <label>Company</label>
                   <input
                     type="text"
                     placeholder="Optional"
@@ -191,7 +194,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           )}
 
           <div className="form-group">
-            <label>Email Address</label>
+            <label>Email</label>
             <input
               type="email"
               required
@@ -214,7 +217,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
 
           <button type="submit" className="auth-submit-purple" disabled={loading || !isSupabaseConfigured}>
             {loading ? (
-              'Connecting to Supabase...'
+              'Signing in...'
             ) : mode === 'login' ? (
               'Sign In'
             ) : (

@@ -59,6 +59,7 @@ export default function App() {
       await logoutUser();
       setCurrentUser(null);
       setDashboardDataLoaded(false);
+      setActiveTab('Dashboard');
       showToast('Signed out of session.');
     } catch (error: unknown) {
       showToast(error instanceof Error ? error.message : 'Could not sign out.');
@@ -71,7 +72,6 @@ export default function App() {
   const [category, setCategory] = useState('All equipment');
   const [maxPrice, setMaxPrice] = useState<number | null>(null);
   const [toast, setToast] = useState('');
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [reservationUpdating, setReservationUpdating] = useState(false);
   const [dataLoadError, setDataLoadError] = useState('');
 
@@ -231,6 +231,13 @@ export default function App() {
     setTimeout(() => setToast(''), 3500);
   };
 
+  const handleAuthenticated = (profile: UserProfile) => {
+    setActiveTab('Dashboard');
+    setDashboardDataLoaded(false);
+    setCurrentUser(profile);
+    showToast(`Welcome back, ${profile.full_name}!`);
+  };
+
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!rentingEquipment || !currentUser) return;
@@ -249,7 +256,7 @@ export default function App() {
       const end = new Date(start.getTime() + parsedDays * 86400000);
       const dailyInsuranceRate = rentingEquipment.category?.base_daily_insurance_rate;
       if (dailyInsuranceRate === undefined) {
-        throw new Error('This equipment has no insurance rate configured in Supabase.');
+        throw new Error('Insurance rate is missing for this equipment.');
       }
       await createRentalOrder({
         customerId: currentUser.id,
@@ -278,7 +285,7 @@ export default function App() {
           order.id === orderId ? { ...order, status: 'confirmed' } : order
         )
       );
-      showToast('Reservation approved! Ready for fulfillment dispatch.');
+      showToast('Reservation approved.');
       await reloadData();
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Could not approve reservation');
@@ -296,7 +303,7 @@ export default function App() {
           order.id === orderId ? { ...order, status: 'cancelled' } : order
         )
       );
-      showToast('Reservation rejected and status updated.');
+      showToast('Reservation rejected.');
       await reloadData();
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Could not reject reservation');
@@ -317,7 +324,7 @@ export default function App() {
         companyName: profileCompany,
       });
       setCurrentUser(updated);
-      showToast('Profile information successfully saved!');
+      showToast('Profile saved.');
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Could not save profile');
     } finally {
@@ -329,7 +336,7 @@ export default function App() {
     if (!currentUser) return;
     try {
       await executeRentalDispatch(orderId, currentUser.id);
-      showToast('Dispatched: Status updated to active in Supabase!');
+      showToast('Equipment dispatched.');
       await reloadData();
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Dispatch failed');
@@ -369,8 +376,8 @@ export default function App() {
       });
       showToast(
         res.maintenanceCreated
-          ? 'Damage flagged: Work order logged directly in Supabase maintenance_records!'
-          : 'Equipment inspected, returned & status set to Available in Supabase!'
+          ? 'Damage noted. Maintenance work order created.'
+          : 'Return completed.'
       );
       setReturningItemId(null);
       setReturnOdometer('');
@@ -440,75 +447,169 @@ export default function App() {
   const bookingSubtotal = rentingEquipment ? rentingEquipment.daily_rental_rate * bookingDays : 0;
   const bookingInsurance = (bookingInsuranceRate ?? 0) * bookingDays;
   const bookingTax = Math.round((bookingSubtotal + bookingInsurance) * 0.08 * 100) / 100;
+  const dashboardMetrics = currentRole === 'customer'
+    ? [
+        {
+          title: 'My Orders',
+          value: String(orders.length),
+          suffix: 'Orders',
+          pill: `${activeContracts.length} active`,
+          detail: `${pendingRequests.length} pending`,
+          tone: 'purple',
+          tab: 'My Reservations',
+        },
+        {
+          title: 'Total Spent',
+          value: formatPHP(totalRentalRevenue),
+          suffix: '',
+          pill: `${orders.filter((order) => order.status !== 'cancelled').length} bookings`,
+          detail: 'Excludes cancelled orders',
+          tone: 'green',
+          tab: 'My Reservations',
+        },
+        {
+          title: 'Available Equipment',
+          value: String(availableEquipment.length),
+          suffix: 'Units',
+          pill: 'Ready to rent',
+          detail: `${totalFleet} listed`,
+          tone: 'green',
+          tab: 'Browse Equipment',
+        },
+        {
+          title: 'Active Rentals',
+          value: String(activeContracts.length),
+          suffix: 'Orders',
+          pill: `${rentedEquipment.length} equipment`,
+          detail: 'Currently rented',
+          tone: 'purple',
+          tab: 'My Reservations',
+        },
+      ]
+    : currentRole === 'staff'
+      ? [
+          {
+            title: 'Equipment',
+            value: String(totalFleet),
+            suffix: 'Units',
+            pill: `${availableEquipment.length} available`,
+            detail: 'In the fleet',
+            tone: 'green',
+            tab: 'Fleet Inventory',
+          },
+          {
+            title: 'Pending Requests',
+            value: String(pendingRequests.length),
+            suffix: 'Orders',
+            pill: 'Needs review',
+            detail: 'Awaiting approval',
+            tone: 'purple',
+            tab: 'Reservation Review',
+          },
+          {
+            title: 'Ready to Dispatch',
+            value: String(orders.filter((order) => order.status === 'confirmed').length),
+            suffix: 'Orders',
+            pill: 'Approved',
+            detail: 'Awaiting dispatch',
+            tone: 'green',
+            tab: 'Dispatch & Checkout',
+          },
+          {
+            title: 'Maintenance',
+            value: String(maintenanceEquipment.length),
+            suffix: 'Units',
+            pill: `${maintenance.length} work orders`,
+            detail: 'In service',
+            tone: 'purple',
+            tab: 'Maintenance Queue',
+          },
+        ]
+      : [
+          {
+            title: 'Equipment',
+            value: String(totalFleet),
+            suffix: 'Units',
+            pill: `${availableEquipment.length} available`,
+            detail: `${formatPHP(totalFleetValuation)} total value`,
+            tone: 'green',
+            tab: 'Fleet Inventory',
+          },
+          {
+            title: 'Active Rentals',
+            value: String(rentedEquipment.length),
+            suffix: 'Units',
+            pill: `${activeContracts.length} active orders`,
+            detail: 'Currently rented',
+            tone: 'purple',
+            tab: 'Transactions',
+          },
+          {
+            title: 'Revenue',
+            value: formatPHP(totalRentalRevenue),
+            suffix: '',
+            pill: `${orders.length} orders`,
+            detail: `${pendingRequests.length} pending`,
+            tone: 'green',
+            tab: 'Transactions',
+          },
+          {
+            title: 'Availability',
+            value: `${totalFleet > 0 ? ((availableEquipment.length / totalFleet) * 100).toFixed(0) : 0}%`,
+            suffix: '',
+            pill: `${maintenanceEquipment.length} in service`,
+            detail: `${maintenance.length} work orders`,
+            tone: maintenanceEquipment.length > 0 ? 'red' : 'green',
+            tab: 'Maintenance Oversight',
+          },
+        ];
 
   if (!isSupabaseConfigured) {
-    return <AuthScreen onAuthenticated={setCurrentUser} />;
+    return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
 
   if (authChecking) {
-    return <LoadingScreen message="Restoring your session..." />;
+    return <LoadingScreen />;
   }
 
   if (!currentUser) {
     return (
       <AuthScreen
-        onAuthenticated={(profile) => {
-          setCurrentUser(profile);
-          showToast(`Welcome back, ${profile.full_name}!`);
-        }}
+        onAuthenticated={handleAuthenticated}
       />
     );
   }
 
   if (!dashboardDataLoaded) {
-    return <LoadingScreen message="Loading your dashboard..." />;
+    return <LoadingScreen />;
   }
 
   const activeUser = currentUser;
 
   return (
     <div className="outer-lavender-wrap">
-      {/* Mobile Drawer Backdrop */}
-      <div
-        className={`mobile-backdrop ${mobileNavOpen ? 'active' : ''}`}
-        onClick={() => setMobileNavOpen(false)}
-      />
-
       <div className="finset-frame">
         {/* SIDEBAR: PURE WHITE WITH VIBRANT PURPLE ACTIVE PILL */}
-        <aside className={`finset-sidebar ${mobileNavOpen ? 'mobile-open' : ''}`}>
+        <aside className="finset-sidebar">
           {/* FinSet-style Circular Brand Header */}
           <div className="finset-brand">
             <div className="brand-left">
               <span className="brand-name">Equip<span>Rent</span></span>
             </div>
-            <div
-              className="sidebar-collapse-icon"
-              onClick={() => setMobileNavOpen(false)}
-              style={{ cursor: 'pointer' }}
-            >
+            <div className="sidebar-collapse-icon">
               &lsaquo;
             </div>
           </div>
           {dataLoadError && (
             <div role="alert" style={{ padding: 12, marginBottom: 16, borderRadius: 12, background: 'var(--red-bg)', color: 'var(--red-kpi)' }}>
-              Could not load the latest Supabase data: {dataLoadError}
+              Could not load data: {dataLoadError}
             </div>
           )}
-          {activeUser.requested_role && activeUser.role !== activeUser.requested_role && (
-            <div role="status" style={{ padding: 12, marginBottom: 16, borderRadius: 12, background: 'var(--purple-light)', color: 'var(--purple-main)' }}>
-              Your request for the {activeUser.requested_role} role is pending administrator approval. Your current access remains Customer.
-            </div>
-          )}
-
           {/* Navigation Items */}
           <nav className="finset-nav">
             <button
               className={`finset-nav-btn ${activeTab === 'Dashboard' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveTab('Dashboard');
-                setMobileNavOpen(false);
-              }}
+              onClick={() => setActiveTab('Dashboard')}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
               <span>Dashboard</span>
@@ -516,111 +617,84 @@ export default function App() {
 
             <button
               className={`finset-nav-btn ${activeTab === 'Browse Equipment' || activeTab === 'Fleet Inventory' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveTab(currentRole === 'customer' ? 'Browse Equipment' : 'Fleet Inventory');
-                setMobileNavOpen(false);
-              }}
+              onClick={() => setActiveTab(currentRole === 'customer' ? 'Browse Equipment' : 'Fleet Inventory')}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
-              <span>{currentRole === 'customer' ? 'Equipment Catalog' : 'Fleet Inventory'}</span>
+              <span>Equipment</span>
             </button>
 
             {currentRole === 'customer' && (
               <button
                 className={`finset-nav-btn ${activeTab === 'Availability Calendar' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab('Availability Calendar');
-                  setMobileNavOpen(false);
-                }}
+                onClick={() => setActiveTab('Availability Calendar')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                <span>Availability Calendar</span>
+                <span>Availability</span>
               </button>
             )}
 
             <button
               className={`finset-nav-btn ${activeTab === 'Transactions' || activeTab === 'My Reservations' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveTab(currentRole === 'customer' ? 'My Reservations' : 'Transactions');
-                setMobileNavOpen(false);
-              }}
+              onClick={() => setActiveTab(currentRole === 'customer' ? 'My Reservations' : 'Transactions')}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="3"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
-              <span>{currentRole === 'customer' ? 'My Reservations' : 'Rental Contracts'}</span>
+              <span>Orders</span>
             </button>
 
             {currentRole !== 'customer' && (
               <button
                 className={`finset-nav-btn ${activeTab === 'Reservation Review' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab('Reservation Review');
-                  setMobileNavOpen(false);
-                }}
+                onClick={() => setActiveTab('Reservation Review')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-                <span>Review Requests</span>
+                <span>Requests</span>
               </button>
             )}
 
             {currentRole !== 'customer' && (
               <button
                 className={`finset-nav-btn ${activeTab === 'Dispatch & Checkout' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab('Dispatch & Checkout');
-                  setMobileNavOpen(false);
-                }}
+                onClick={() => setActiveTab('Dispatch & Checkout')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-                <span>Dispatch &amp; Checkout</span>
+                <span>Dispatch</span>
               </button>
             )}
 
             {currentRole !== 'customer' && (
               <button
                 className={`finset-nav-btn ${activeTab === 'Return & Inspection' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab('Return & Inspection');
-                  setMobileNavOpen(false);
-                }}
+                onClick={() => setActiveTab('Return & Inspection')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-                <span>Return &amp; Inspection</span>
+                <span>Returns</span>
               </button>
             )}
 
             {currentRole !== 'customer' && (
               <button
                 className={`finset-nav-btn ${activeTab === 'Maintenance Oversight' || activeTab === 'Maintenance Queue' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab(currentRole === 'staff' ? 'Maintenance Queue' : 'Maintenance Oversight');
-                  setMobileNavOpen(false);
-                }}
+                onClick={() => setActiveTab(currentRole === 'staff' ? 'Maintenance Queue' : 'Maintenance Oversight')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg>
-                <span>Fleet Maintenance</span>
+                <span>Maintenance</span>
               </button>
             )}
 
             {currentRole === 'admin' && (
               <button
                 className={`finset-nav-btn ${activeTab === 'Engine Audit Logs' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab('Engine Audit Logs');
-                  setMobileNavOpen(false);
-                }}
+                onClick={() => setActiveTab('Engine Audit Logs')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-                <span>DB Engine Audits</span>
+                <span>Audit Log</span>
               </button>
             )}
 
             {currentRole === 'admin' && (
               <button
                 className={`finset-nav-btn ${activeTab === 'Architectural Defense Lab' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab('Architectural Defense Lab');
-                  setMobileNavOpen(false);
-                }}
+                onClick={() => setActiveTab('Architectural Defense Lab')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                 <span>Data Integrity</span>
@@ -629,13 +703,10 @@ export default function App() {
 
             <button
               className={`finset-nav-btn ${activeTab === 'My Profile' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveTab('My Profile');
-                setMobileNavOpen(false);
-              }}
+              onClick={() => setActiveTab('My Profile')}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-              <span>My Profile</span>
+              <span>Profile</span>
             </button>
           </nav>
 
@@ -654,13 +725,6 @@ export default function App() {
           {/* Mobile Top Bar */}
           <div className="mobile-top-bar">
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <button
-                className="mobile-hamburger-btn"
-                onClick={() => setMobileNavOpen(!mobileNavOpen)}
-                aria-label="Toggle Navigation"
-              >
-                ☰
-              </button>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span className="brand-name" style={{ fontSize: 16 }}>Equip<span>Rent</span></span>
               </div>
@@ -675,20 +739,21 @@ export default function App() {
           {/* TOP HEADER: AUTHENTIC GREETING & ROLE INDICATOR */}
           <div className="finset-header" style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
             <div>
-              <h1 className="greeting-title">Welcome back, {activeUser.full_name}!</h1>
-              <p className="greeting-sub">
-                EquipRent: Equipment Rental Management System &bull; Active Role:{' '}
-                <span style={{ textTransform: 'capitalize', fontWeight: 800, color: 'var(--purple-main)' }}>
-                  {currentRole}
-                </span>
-                {activeUser.company_name ? ` &bull; ${activeUser.company_name}` : ''}
-              </p>
+              <h1 className="greeting-title">
+                {activeTab !== 'Dashboard'
+                  ? activeTab
+                  : currentRole === 'customer'
+                    ? 'Customer Dashboard'
+                    : currentRole === 'staff'
+                      ? 'Staff Dashboard'
+                      : 'Admin Dashboard'}
+              </h1>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <button
                 className="outline-pill-btn"
                 onClick={reloadData}
-                title="Refresh live data from Supabase"
+                title="Refresh data"
                 style={{ padding: '6px 14px', fontSize: 11 }}
               >
                 ↻ Refresh Data
@@ -696,101 +761,39 @@ export default function App() {
             </div>
           </div>
 
-          {/* DASHBOARD TAB VIEW (100% REAL SUPABASE DATA DRIVEN) */}
+          {/* Dashboard */}
           {activeTab === 'Dashboard' && (
             <>
-              {/* 4 REAL KPI METRIC CARDS ROW */}
               <div className="kpi-cards-grid">
-                {/* 1. Total Fleet Machinery */}
-                <div
-                  className="kpi-card"
-                  onClick={() => setActiveTab(currentRole === 'customer' ? 'Browse Equipment' : 'Fleet Inventory')}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <div className="kpi-top-row">
-                    <h4 className="kpi-title">Total Fleet Machinery</h4>
-                    <div className="kpi-arrow-circle" title="View fleet inventory">&nearr;</div>
+                {dashboardMetrics.map((metric) => (
+                  <div
+                    className="kpi-card"
+                    key={metric.title}
+                    onClick={() => setActiveTab(metric.tab)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <div className="kpi-top-row">
+                      <h4 className="kpi-title">{metric.title}</h4>
+                      <div className="kpi-arrow-circle" aria-hidden="true">↗</div>
+                    </div>
+                    <div className="kpi-main-stat">
+                      {metric.value}
+                      {metric.suffix && <span style={{ fontSize: 16 }}> {metric.suffix}</span>}
+                    </div>
+                    <div className="kpi-bottom-row">
+                      <span className={`kpi-pill ${metric.tone}`}>{metric.pill}</span>
+                      <span className="kpi-vs-text">{metric.detail}</span>
+                    </div>
                   </div>
-                  <div className="kpi-main-stat">
-                    {totalFleet} <span style={{ fontSize: 16 }}>Units</span>
-                  </div>
-                  <div className="kpi-bottom-row">
-                    <span className="kpi-pill green">{formatPHP(totalFleetValuation)} Value</span>
-                    <span className="kpi-vs-text">{availableEquipment.length} ready in yard</span>
-                  </div>
-                </div>
-
-                {/* 2. On-Rent Deployment */}
-                <div
-                  className="kpi-card"
-                  onClick={() => setActiveTab(currentRole === 'customer' ? 'My Reservations' : 'Transactions')}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <div className="kpi-top-row">
-                    <h4 className="kpi-title">Active On-Rent Fleet</h4>
-                    <div className="kpi-arrow-circle" title="View active rentals">&nearr;</div>
-                  </div>
-                  <div className="kpi-main-stat">
-                    {rentedEquipment.length} <span style={{ fontSize: 16 }}>Units</span>
-                  </div>
-                  <div className="kpi-bottom-row">
-                    <span className="kpi-pill purple">
-                      {totalFleet > 0 ? ((rentedEquipment.length / totalFleet) * 100).toFixed(0) : 0}% Deployed
-                    </span>
-                    <span className="kpi-vs-text">{activeContracts.length} active jobsites</span>
-                  </div>
-                </div>
-
-                {/* 3. Real Rental Revenue */}
-                <div
-                  className="kpi-card"
-                  onClick={() => setActiveTab(currentRole === 'customer' ? 'My Reservations' : 'Transactions')}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <div className="kpi-top-row">
-                    <h4 className="kpi-title">Rental Revenue Ledger</h4>
-                    <div className="kpi-arrow-circle" title="View ledger">&nearr;</div>
-                  </div>
-                  <div className="kpi-main-stat">
-                    {formatPHP(totalRentalRevenue)}
-                  </div>
-                  <div className="kpi-bottom-row">
-                    <span className="kpi-pill green">{orders.length} Contracts</span>
-                    <span className="kpi-vs-text">{pendingRequests.length} pending review</span>
-                  </div>
-                </div>
-
-                {/* 4. Fleet Readiness */}
-                <div
-                  className="kpi-card"
-                  onClick={() => currentRole !== 'customer' && setActiveTab('Maintenance Oversight')}
-                  style={{ cursor: currentRole !== 'customer' ? 'pointer' : 'default' }}
-                >
-                  <div className="kpi-top-row">
-                    <h4 className="kpi-title">Fleet Readiness</h4>
-                    <div className="kpi-arrow-circle" title="Maintenance">&nearr;</div>
-                  </div>
-                  <div className="kpi-main-stat">
-                    {totalFleet > 0 ? ((availableEquipment.length / totalFleet) * 100).toFixed(0) : 0}%
-                  </div>
-                  <div className="kpi-bottom-row">
-                    <span className={`kpi-pill ${maintenanceEquipment.length > 0 ? 'red' : 'green'}`}>
-                      {maintenanceEquipment.length} in maintenance
-                    </span>
-                    <span className="kpi-vs-text">{maintenance.length} work orders</span>
-                  </div>
-                </div>
+                ))}
               </div>
-              {/* MIDDLE SECTION: REAL LIVE CATEGORY BREAKDOWN + OPERATIONAL ACTION HUB */}
+              {/* Equipment overview and quick actions */}
               <div className="middle-dashboard-grid">
-                {/* Left: Real Category Breakdown */}
+                {/* Equipment by category */}
                 <div className="analytics-chart-card">
                   <div className="chart-header-row">
                     <div>
-                      <h3 className="chart-card-title">Fleet Category Breakdown</h3>
-                      <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                        Live machinery inventory synchronized with Supabase PostgreSQL
-                      </p>
+                      <h3 className="chart-card-title">Equipment by Category</h3>
                     </div>
 
                     <div className="chart-legend">
@@ -834,22 +837,19 @@ export default function App() {
 
                     {Object.keys(categoriesMap).length === 0 && (
                       <p style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: 20 }}>
-                        No categories loaded yet. Connected to Supabase.
+                        No categories yet.
                       </p>
                     )}
                   </div>
                 </div>
 
-                {/* Right: Operational Hub Tailored to Role */}
+                {/* Quick actions */}
                 <div className="donut-breakdown-card">
                   {currentRole === 'customer' ? (
                     <div>
                       <div className="donut-card-header">
                         <div>
-                          <h3 className="chart-card-title">Quick Equipment Reserve</h3>
-                          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                            Top machinery units available for immediate jobsite dispatch
-                          </p>
+                          <h3 className="chart-card-title">Available Equipment</h3>
                         </div>
                       </div>
 
@@ -909,7 +909,7 @@ export default function App() {
                         )}
                         {equipmentList.length === 0 && (
                           <p style={{ color: 'var(--text-muted)', fontSize: 12, textAlign: 'center', padding: 18 }}>
-                            No equipment is listed in Supabase yet.
+                            No equipment listed yet.
                           </p>
                         )}
 
@@ -918,7 +918,7 @@ export default function App() {
                           style={{ width: '100%', marginTop: 8, textAlign: 'center', justifyContent: 'center' }}
                           onClick={() => setActiveTab('Browse Equipment')}
                         >
-                          View All Machinery Catalog ({totalFleet}) &rarr;
+                          View all equipment ({totalFleet}) &rarr;
                         </button>
                       </div>
                     </div>
@@ -926,10 +926,9 @@ export default function App() {
                     <div>
                       <div className="donut-card-header">
                         <div>
-                          <h3 className="chart-card-title">Operational Workflow Actions</h3>
-                          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                            Active pipeline for rental fulfilling and maintenance
-                          </p>
+                          <h3 className="chart-card-title">
+                            {currentRole === 'staff' ? 'Staff Tasks' : 'Admin Overview'}
+                          </h3>
                         </div>
                       </div>
 
@@ -946,17 +945,23 @@ export default function App() {
                           }}
                         >
                           <div>
-                            <strong style={{ fontSize: 13, color: '#111827' }}>Pending Requests</strong>
+                            <strong style={{ fontSize: 13, color: '#111827' }}>
+                              {currentRole === 'staff' ? 'Pending Requests' : 'Audit Log'}
+                            </strong>
                             <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
-                              {pendingRequests.length} reservations awaiting approval
+                              {currentRole === 'staff'
+                                ? `${pendingRequests.length} awaiting approval`
+                                : `${auditLogs.length} recent changes`}
                             </p>
                           </div>
                           <button
                             className="primary-purple-btn"
                             style={{ padding: '6px 12px', fontSize: 11 }}
-                            onClick={() => setActiveTab('Reservation Review')}
+                            onClick={() =>
+                              setActiveTab(currentRole === 'staff' ? 'Reservation Review' : 'Engine Audit Logs')
+                            }
                           >
-                            Review &rarr;
+                            {currentRole === 'staff' ? 'Review' : 'View'} &rarr;
                           </button>
                         </div>
 
@@ -972,17 +977,23 @@ export default function App() {
                           }}
                         >
                           <div>
-                            <strong style={{ fontSize: 13, color: '#111827' }}>Fulfillment Dispatch</strong>
+                            <strong style={{ fontSize: 13, color: '#111827' }}>
+                              {currentRole === 'staff' ? 'Ready to Dispatch' : 'Equipment'}
+                            </strong>
                             <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
-                              {orders.filter((o) => o.status === 'confirmed').length} bookings ready for dispatch
+                              {currentRole === 'staff'
+                                ? `${orders.filter((o) => o.status === 'confirmed').length} orders`
+                                : `${availableEquipment.length} available`}
                             </p>
                           </div>
                           <button
                             className="primary-purple-btn"
                             style={{ padding: '6px 12px', fontSize: 11 }}
-                            onClick={() => setActiveTab('Dispatch & Checkout')}
+                            onClick={() =>
+                              setActiveTab(currentRole === 'staff' ? 'Dispatch & Checkout' : 'Fleet Inventory')
+                            }
                           >
-                            Dispatch &rarr;
+                            {currentRole === 'staff' ? 'Dispatch' : 'Manage'} &rarr;
                           </button>
                         </div>
 
@@ -998,9 +1009,9 @@ export default function App() {
                           }}
                         >
                           <div>
-                            <strong style={{ fontSize: 13, color: '#111827' }}>Fleet Maintenance Queue</strong>
+                            <strong style={{ fontSize: 13, color: '#111827' }}>Maintenance</strong>
                             <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
-                              {maintenance.length} work orders in service log
+                              {maintenance.length} work orders
                             </p>
                           </div>
                           <button
@@ -1017,16 +1028,13 @@ export default function App() {
                 </div>
               </div>
 
-              {/* BOTTOM SECTION: REAL RECENT SUPABASE ORDERS + ACTIVE FLEET UNITS */}
+              {/* Recent orders and equipment */}
               <div className="bottom-dashboard-grid">
                 {/* Left: Recent Rental Contracts */}
                 <div className="transactions-table-card">
                   <div className="table-card-header">
                     <div>
-                      <h3 className="chart-card-title">Recent Rental Orders</h3>
-                      <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                        Live records fetched directly from Supabase <code>rental_orders</code> table
-                      </p>
+                      <h3 className="chart-card-title">Recent Orders</h3>
                     </div>
                     <button
                       className="see-all-link"
@@ -1074,7 +1082,7 @@ export default function App() {
                         {orders.length === 0 && (
                           <tr>
                             <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>
-                              No rental contracts created yet in Supabase.
+                              No orders yet.
                             </td>
                           </tr>
                         )}
@@ -1083,14 +1091,11 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Right: Real Active Fleet Status */}
+                {/* Equipment status */}
                 <div className="goals-progress-card">
                   <div className="table-card-header">
                     <div>
-                      <h3 className="chart-card-title">Fleet Units in Depot</h3>
-                      <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                        Direct live status from Supabase <code>equipment</code>
-                      </p>
+                      <h3 className="chart-card-title">Equipment</h3>
                     </div>
                     <button
                       className="see-all-link"
@@ -1129,7 +1134,7 @@ export default function App() {
 
                     {equipmentList.length === 0 && (
                       <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, padding: 20 }}>
-                        No equipment units found in Supabase.
+                        No equipment found.
                       </p>
                     )}
                   </div>
@@ -1143,10 +1148,7 @@ export default function App() {
             <div className="transactions-table-card" style={{ marginTop: 6 }}>
               <div className="table-card-header">
                 <div>
-                  <h3 className="chart-card-title">Machinery Catalog &amp; Active Inventory</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Synchronized directly with your live Supabase PostgreSQL instance
-                  </p>
+                  <h3 className="chart-card-title">Equipment</h3>
                 </div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   <input
@@ -1168,7 +1170,7 @@ export default function App() {
                   </select>
 
                   <div className="price-slider-wrap">
-                    <label htmlFor="max-daily-rate">Max price (PHP)/day</label>
+                    <label htmlFor="max-daily-rate">Max price/day</label>
                     <input
                       id="max-daily-rate"
                       type="number"
@@ -1261,19 +1263,16 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB: AVAILABILITY CALENDAR */}
+          {/* Availability calendar */}
           {activeTab === 'Availability Calendar' && (
             <div className="calendar-card">
               <div className="calendar-top-bar">
                 <div>
-                  <h3 className="chart-card-title">Fleet Availability Calendar</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Visual schedule displaying booked, open, and servicing periods to prevent double-booking
-                  </p>
+                  <h3 className="chart-card-title">Availability</h3>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <label style={{ fontSize: 12, fontWeight: 700, color: '#374151' }}>Selected Machine:</label>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: '#374151' }}>Equipment</label>
                   <select
                     className="filter-select-pill"
                     value={calEquipId}
@@ -1321,7 +1320,7 @@ export default function App() {
                   </span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ef4444' }} />
-                    Scheduled Maintenance
+                    Maintenance
                   </span>
                 </div>
               </div>
@@ -1375,10 +1374,10 @@ export default function App() {
                 <div style={{ marginTop: 22, padding: 18, borderRadius: 18, background: '#fafaff', border: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
                   <div>
                     <h5 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 800, color: '#111827' }}>
-                      Selected Date: {calSelectedDate} &bull; {selectedCalEquip.model_name}
+                      {calSelectedDate} · {selectedCalEquip.model_name}
                     </h5>
                     <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
-                      Daily Rate: <strong>{formatPHP(selectedCalEquip.daily_rental_rate)}/day</strong> &bull; Current Status: <strong style={{ color: selectedCalEquip.current_status === 'available' ? '#047857' : '#b45309', textTransform: 'capitalize' }}>{selectedCalEquip.current_status}</strong>
+                        {formatPHP(selectedCalEquip.daily_rental_rate)}/day · <strong style={{ color: selectedCalEquip.current_status === 'available' ? '#047857' : '#b45309', textTransform: 'capitalize' }}>{selectedCalEquip.current_status}</strong>
                     </p>
                   </div>
 
@@ -1390,7 +1389,7 @@ export default function App() {
                       setBookStartDate(calSelectedDate);
                     }}
                   >
-                    Reserve From {calSelectedDate} &rarr;
+                    Reserve
                   </button>
                 </div>
               )}
@@ -1402,10 +1401,7 @@ export default function App() {
             <div className="transactions-table-card" style={{ marginTop: 6 }}>
               <div className="table-card-header">
                 <div>
-                  <h3 className="chart-card-title">Rental Contracts &amp; Ledger</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Protected by Supabase Row Level Security (RLS) policies
-                  </p>
+                  <h3 className="chart-card-title">Orders</h3>
                 </div>
                 <button className="primary-purple-btn" onClick={() => setActiveTab('Browse Equipment')}>
                   + New Booking
@@ -1453,7 +1449,7 @@ export default function App() {
                     {orders.length === 0 && (
                       <tr>
                         <td colSpan={6} style={{ textAlign: 'center', padding: 30, color: 'var(--text-muted)' }}>
-                          No rental transactions recorded yet.
+                          No orders yet.
                         </td>
                       </tr>
                     )}
@@ -1468,12 +1464,9 @@ export default function App() {
             <div className="transactions-table-card" style={{ marginTop: 6 }}>
               <div className="table-card-header">
                 <div>
-                  <h3 className="chart-card-title">Reservation Review &amp; Approval Station</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Staff review workflow: Approve customer bookings, reject non-viable requests, or transition to dispatch
-                  </p>
+                  <h3 className="chart-card-title">Reservation Requests</h3>
                 </div>
-                <span className="kpi-pill green">Operational Desk</span>
+                <span className="kpi-pill green">Operations</span>
               </div>
 
               <div className="table-responsive">
@@ -1481,7 +1474,7 @@ export default function App() {
                   <thead>
                     <tr>
                       <th>ORDER #</th>
-                      <th>CUSTOMER &amp; PHONE</th>
+                      <th>CUSTOMER</th>
                       <th>EQUIPMENT</th>
                       <th>DATES</th>
                       <th>TOTAL</th>
@@ -1559,17 +1552,13 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB: DISPATCH & CHECKOUT (STORED PROCEDURE) */}
+          {/* Dispatch */}
           {activeTab === 'Dispatch & Checkout' && (
             <div className="transactions-table-card" style={{ marginTop: 6 }}>
               <div className="table-card-header">
                 <div>
-                  <h3 className="chart-card-title">Dispatch &amp; Checkout Workstation</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Stored Procedure execution: <code>sp_process_rental_checkout(order_id, staff_id)</code>
-                  </p>
+                  <h3 className="chart-card-title">Dispatch</h3>
                 </div>
-                <span className="kpi-pill green">Technician Authenticated</span>
               </div>
 
               <div className="table-responsive">
@@ -1601,7 +1590,7 @@ export default function App() {
                               style={{ padding: '6px 14px', fontSize: 11 }}
                               onClick={() => handleDispatchCheckout(ord.id)}
                             >
-                              Dispatch (Run Stored Proc)
+                              Dispatch
                             </button>
                           ) : (
                             <span style={{ color: '#9ca3af', fontSize: 11 }}>Dispatched / Completed</span>
@@ -1620,10 +1609,7 @@ export default function App() {
             <div className="transactions-table-card" style={{ marginTop: 6 }}>
               <div className="table-card-header">
                 <div>
-                  <h3 className="chart-card-title">Equipment Return &amp; Inspection</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Stored Procedure execution: <code>sp_process_equipment_return(...)</code>
-                  </p>
+                  <h3 className="chart-card-title">Returns</h3>
                 </div>
               </div>
 
@@ -1634,7 +1620,7 @@ export default function App() {
                       <th>ITEM ID</th>
                       <th>MACHINERY MODEL</th>
                       <th>RENTAL STATUS</th>
-                      <th>DEPARTURE ODOMETER</th>
+                      <th>START HOURS</th>
                       <th>ACTION</th>
                     </tr>
                   </thead>
@@ -1683,10 +1669,7 @@ export default function App() {
             <div className="transactions-table-card" style={{ marginTop: 6 }}>
               <div className="table-card-header">
                 <div>
-                  <h3 className="chart-card-title">Fleet Maintenance Work Orders</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Junction Entity: Maintenance Work Orders &amp; Technicians
-                  </p>
+                  <h3 className="chart-card-title">Maintenance</h3>
                 </div>
               </div>
 
@@ -1728,10 +1711,7 @@ export default function App() {
             <div className="transactions-table-card" style={{ marginTop: 6 }}>
               <div className="table-card-header">
                 <div>
-                  <h3 className="chart-card-title">PostgreSQL Universal Mutation Audit Logs</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Trigger: <code>fn_universal_audit_logger()</code> capturing live JSON mutation diffs
-                  </p>
+                  <h3 className="chart-card-title">Audit Log</h3>
                 </div>
               </div>
 
@@ -1743,7 +1723,7 @@ export default function App() {
                       <th>TABLE</th>
                       <th>RECORD ID</th>
                       <th>ACTION</th>
-                      <th>MUTATION SNAPSHOT</th>
+                      <th>CHANGES</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1775,14 +1755,11 @@ export default function App() {
             <div className="transactions-table-card" style={{ marginTop: 6 }}>
               <div className="table-card-header">
                 <div>
-                  <h3 className="chart-card-title">Database Integrity</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Live records are protected by database constraints.
-                  </p>
+                  <h3 className="chart-card-title">Data Integrity</h3>
                 </div>
               </div>
               <p style={{ padding: 18, color: 'var(--text-muted)' }}>
-                Equipment linked to rental items cannot be deleted while those records exist. No destructive test is run against your Supabase data.
+                Equipment on an order cannot be deleted.
               </p>
             </div>
           )}
@@ -1817,7 +1794,7 @@ export default function App() {
                   textTransform: 'uppercase',
                   marginBottom: 16,
                 }}>
-                  {currentRole} Role
+                  {currentRole}
                 </span>
 
                 <div style={{ width: '100%', borderTop: '1px solid var(--border-subtle)', paddingTop: 16, fontSize: 12, textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1837,16 +1814,13 @@ export default function App() {
               {/* Right: Editable Profile Form */}
               <div className="profile-form-card">
                 <div style={{ marginBottom: 20 }}>
-                  <h3 className="chart-card-title">Permitted Profile Information</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Update your account details, contact phone, and company or jobsite affiliation
-                  </p>
+                  <h3 className="chart-card-title">Profile Details</h3>
                 </div>
 
                 <form onSubmit={handleProfileUpdate} className="auth-form-finset">
                   <div className="form-row">
                     <div className="form-group">
-                      <label>Full Legal Name</label>
+                      <label>Full Name</label>
                       <input
                         type="text"
                         value={profileName}
@@ -1856,7 +1830,7 @@ export default function App() {
                     </div>
 
                     <div className="form-group">
-                      <label>Email Address (Supabase Auth)</label>
+                      <label>Email</label>
                       <input
                         type="email"
                         value={activeUser.email}
@@ -1868,7 +1842,7 @@ export default function App() {
 
                   <div className="form-row">
                     <div className="form-group">
-                      <label>Primary Phone Number</label>
+                      <label>Phone</label>
                       <input
                         type="tel"
                         autoComplete="tel"
@@ -1883,7 +1857,7 @@ export default function App() {
                     </div>
 
                     <div className="form-group">
-                      <label>Company / Enterprise Name</label>
+                      <label>Company</label>
                       <input
                         type="text"
                         value={profileCompany}
@@ -1894,7 +1868,7 @@ export default function App() {
                   </div>
 
                   <div className="form-group">
-                    <label>Default Jobsite / Delivery Site</label>
+                    <label>Default Delivery Address</label>
                     <input
                       type="text"
                       value={bookAddress}
@@ -1939,7 +1913,7 @@ export default function App() {
               onClick={() => setActiveTab(currentRole === 'customer' ? 'Availability Calendar' : 'Reservation Review')}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-              <span>{currentRole === 'customer' ? 'Calendar' : 'Review'}</span>
+              <span>{currentRole === 'customer' ? 'Calendar' : 'Requests'}</span>
             </button>
 
             <button
@@ -1969,13 +1943,13 @@ export default function App() {
               Reserve {rentingEquipment.model_name}
             </h2>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 20px' }}>
-              {formatPHP(rentingEquipment.daily_rental_rate)}/day &bull; Replacement Value: {formatPHP(rentingEquipment.replacement_value)}
+              {formatPHP(rentingEquipment.daily_rental_rate)}/day · Value: {formatPHP(rentingEquipment.replacement_value)}
             </p>
 
             <form onSubmit={handleBookingSubmit} className="auth-form-finset">
               <div className="form-row">
                 <div className="form-group">
-                  <label>Preferred Start Date</label>
+                  <label>Start Date</label>
                   <input
                     type="date"
                     value={bookStartDate}
@@ -1985,7 +1959,7 @@ export default function App() {
                 </div>
 
                 <div className="form-group">
-                  <label>Rental Duration (Days)</label>
+                  <label>Rental Days</label>
                   <input
                     type="number"
                     min="1"
@@ -1998,7 +1972,7 @@ export default function App() {
               </div>
 
               <div className="form-group">
-                <label>Job Site / Delivery Address</label>
+                <label>Delivery Address</label>
                 <input
                   type="text"
                   value={bookAddress}
@@ -2009,28 +1983,28 @@ export default function App() {
 
               <div style={{ background: '#fafaff', border: '1px solid var(--border-subtle)', padding: 16, borderRadius: 16, fontSize: 12, margin: '6px 0 16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span>Rental Period:</span>
+                  <span>Period</span>
                   <strong>{bookStartDate} &rarr; {bookStartDate && bookDays ? toDateInputValue(new Date(new Date(`${bookStartDate}T00:00:00`).getTime() + bookingDays * 86400000)) : '—'} ({bookDays || '—'} days)</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span>Daily Rate:</span>
+                  <span>Daily rate</span>
                   <strong>{formatPHP(rentingEquipment.daily_rental_rate)}/day</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span>Subtotal:</span>
+                  <span>Subtotal</span>
                   <strong>{formatPHP(bookingSubtotal)}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span>Insurance:</span>
+                  <span>Insurance</span>
                   <span>{bookingInsuranceRate === undefined ? 'Not configured' : formatPHP(bookingInsurance)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span>Tax (8%):</span>
+                  <span>Tax (8%)</span>
                   <span>{formatPHP(bookingTax)}</span>
                 </div>
                 <hr style={{ border: 0, borderTop: '1px solid var(--border-subtle)', margin: '10px 0' }} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 800, color: 'var(--purple-main)' }}>
-                  <span>Total Amount:</span>
+                  <span>Total</span>
                   <span>{formatPHP(bookingSubtotal + bookingInsurance + bookingTax)}</span>
                 </div>
               </div>
@@ -2057,15 +2031,12 @@ export default function App() {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(30, 20, 60, 0.45)', backdropFilter: 'blur(6px)', display: 'grid', placeItems: 'center', zIndex: 1000, padding: 18 }}>
           <div style={{ background: '#ffffff', borderRadius: 32, padding: 34, maxWidth: 500, width: '100%', boxShadow: '0 25px 70px rgba(0,0,0,0.22)' }}>
             <h2 style={{ fontSize: 22, fontWeight: 800, margin: '0 0 6px', color: '#111827' }}>
-              Return Inspection Checklist
+              Return Inspection
             </h2>
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 18px' }}>
-              PostgreSQL Stored Procedure: <code>sp_process_equipment_return</code>
-            </p>
 
             <form onSubmit={handleReturnSubmit} className="auth-form-finset">
               <div className="form-group">
-                <label>Final Odometer (Hours)</label>
+                <label>Return Hours</label>
                 <input
                   type="number"
                   step="0.5"
@@ -2098,7 +2069,7 @@ export default function App() {
                   style={{ width: '100%', padding: '10px 14px' }}
                   required
                 >
-                  <option value="">Select observed condition</option>
+                  <option value="">Select rating</option>
                   {[1, 2, 3, 4, 5].map((rating) => (
                     <option key={rating} value={rating}>{rating} / 5</option>
                   ))}
@@ -2114,7 +2085,7 @@ export default function App() {
                   style={{ width: '100%', padding: '10px 14px' }}
                   required
                 >
-                  <option value="">Select observed condition</option>
+                  <option value="">Select rating</option>
                   {[1, 2, 3, 4, 5].map((rating) => (
                     <option key={rating} value={rating}>{rating} / 5</option>
                   ))}
@@ -2127,13 +2098,13 @@ export default function App() {
                   rows={2}
                   value={damageNotes}
                   onChange={(e) => setDamageNotes(e.target.value)}
-                  placeholder="Record any damage found during inspection"
+                  placeholder="Damage details"
                   style={{ width: '100%', padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border-input)', background: '#fafaff' }}
                 />
               </div>
 
               <div className="form-group">
-                <label>Damage Penalty Fee (PHP)</label>
+                <label>Damage Fee (PHP)</label>
                 <input
                   type="number"
                   min="0"
@@ -2152,7 +2123,7 @@ export default function App() {
                   Cancel
                 </button>
                 <button type="submit" className="primary-purple-btn">
-                  Submit Return Inspection
+                  Submit Return
                 </button>
               </div>
             </form>

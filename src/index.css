@@ -217,43 +217,33 @@
 }
 
 .loading-screen-card {
+  position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  width: min(100%, 360px);
-  padding: 44px 32px;
-  border: 1px solid rgba(110, 84, 243, 0.12);
-  border-radius: 24px;
-  background: #ffffff;
-  box-shadow: var(--card-shadow);
+  justify-content: center;
+  width: 144px;
+  height: 144px;
 }
 
 .loading-screen-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 34px;
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
 }
 
 .loading-screen-spinner {
-  width: 38px;
-  height: 38px;
-  border: 3px solid #e8e4ff;
+  width: 132px;
+  height: 132px;
+  border: 4px solid #e8e4ff;
   border-top-color: var(--purple-main);
   border-radius: 50%;
   animation: loading-screen-spin 0.8s linear infinite;
 }
 
-.loading-screen-message {
-  margin: 20px 0 6px;
-  color: var(--text-title);
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.loading-screen-caption {
-  color: var(--text-muted);
-  font-size: 11px;
+.loading-screen-brand .brand-name {
+  display: inline;
+  font-size: 20px;
 }
 
 @keyframes loading-screen-spin {
@@ -1310,9 +1300,6 @@
 .mobile-bottom-nav {
   display: none;
 }
-.mobile-backdrop {
-  display: none;
-}
 .table-responsive {
   width: 100%;
   overflow-x: auto;
@@ -1350,47 +1337,12 @@
     z-index: 50;
     flex-shrink: 0;
   }
-  .mobile-hamburger-btn {
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
-    border: 1px solid var(--border-subtle);
-    background: #ffffff;
-    display: grid;
-    place-items: center;
-    color: #111827;
-    font-size: 18px;
-    cursor: pointer;
-  }
-  
-  /* Slide-Over Drawer for Mobile Sidebar */
-  .finset-sidebar {
-    position: fixed;
-    top: 0;
-    left: -290px;
-    width: 270px;
-    height: 100vh;
-    z-index: 1000;
-    transition: left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-    align-items: stretch;
-    padding: 24px 18px;
-  }
-  .finset-sidebar.mobile-open {
-    left: 0;
-  }
-  .brand-name, .finset-nav-btn span, .sidebar-action-btn span {
+  .mobile-top-bar .brand-name {
     display: inline;
   }
-  
-  /* Mobile Backdrop */
-  .mobile-backdrop.active {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(17, 24, 39, 0.4);
-    backdrop-filter: blur(4px);
-    z-index: 999;
+  /* Use the bottom navigation instead of the desktop sidebar on mobile. */
+  .finset-sidebar {
+    display: none;
   }
   
   /* Mobile Main Viewport */

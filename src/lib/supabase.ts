@@ -298,21 +298,35 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
     return null;
   }
 
-  const { data, error } = await getSupabaseClient()
+  const { data: linkedProfile, error: linkedProfileError } = await getSupabaseClient()
     .from('user_profiles')
     .select('*')
-    .or(`auth_user_id.eq.${user.id},email.eq.${user.email}`)
+    .eq('auth_user_id', user.id)
     .maybeSingle();
 
-  if (error) {
-    throw new Error(error.message);
+  if (linkedProfileError) {
+    throw new Error(linkedProfileError.message);
   }
 
-  if (!data) {
+  if (linkedProfile) {
+    return linkedProfile as UserProfile;
+  }
+
+  const { data: legacyProfile, error: legacyProfileError } = await getSupabaseClient()
+    .from('user_profiles')
+    .select('*')
+    .eq('email', user.email ?? '')
+    .maybeSingle();
+
+  if (legacyProfileError) {
+    throw new Error(legacyProfileError.message);
+  }
+
+  if (!legacyProfile || (legacyProfile.auth_user_id && legacyProfile.auth_user_id !== user.id)) {
     throw new Error('Your authenticated account does not have an EquipRent profile.');
   }
 
-  return data as UserProfile;
+  return legacyProfile as UserProfile;
 }
 
 export async function loginWithEmail(
@@ -332,14 +346,32 @@ export async function loginWithEmail(
     throw new Error('Supabase did not return an authenticated user.');
   }
 
-  const { data: profileData, error: profileError } = await getSupabaseClient()
+  const { data: linkedProfile, error: linkedProfileError } = await getSupabaseClient()
     .from('user_profiles')
     .select('*')
-    .or(`auth_user_id.eq.${authData.user.id},email.eq.${authData.user.email}`)
+    .eq('auth_user_id', authData.user.id)
     .maybeSingle();
 
-  if (profileError) {
-    throw new Error(profileError.message);
+  if (linkedProfileError) {
+    throw new Error(linkedProfileError.message);
+  }
+
+  let profileData = linkedProfile;
+  if (!profileData) {
+    const { data: legacyProfile, error: legacyProfileError } = await getSupabaseClient()
+      .from('user_profiles')
+      .select('*')
+      .eq('email', authData.user.email ?? '')
+      .maybeSingle();
+
+    if (legacyProfileError) {
+      throw new Error(legacyProfileError.message);
+    }
+
+    if (legacyProfile?.auth_user_id && legacyProfile.auth_user_id !== authData.user.id) {
+      throw new Error('Authenticated account is not linked to this EquipRent profile.');
+    }
+    profileData = legacyProfile;
   }
 
   if (!profileData) {
@@ -356,7 +388,7 @@ export async function signUpWithProfile(params: {
   phone: string;
   companyName: string;
   requestedRole: UserRole;
-}): Promise<{ profile: UserProfile; message?: string }> {
+}): Promise<{ profile?: UserProfile; message: string }> {
   const { data: authData, error: authError } = await getSupabaseClient().auth.signUp({
     email: params.email,
     password: params.password,
@@ -379,9 +411,9 @@ export async function signUpWithProfile(params: {
   }
 
   if (!authData.session) {
-    throw new Error(
-      'Confirm your email, then sign in before continuing. Reservation actions require an authenticated Supabase session.'
-    );
+    return {
+      message: 'Account created. Confirm your email, then sign in.',
+    };
   }
 
   const { data: profile, error: profileError } = await getSupabaseClient()
