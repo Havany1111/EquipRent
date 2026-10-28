@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { UserProfile, UserRole } from '../types/database';
-import { loginWithEmail, signUpWithProfile, isSupabaseConfigured } from '../lib/supabase';
+import { loginWithEmail, signUpWithProfile, isSupabaseConfigured, logoutUser } from '../lib/supabase';
+import { formatPhilippinePhone } from '../lib/formatters';
 
 interface AuthScreenProps {
   onAuthenticated: (profile: UserProfile) => void;
@@ -8,39 +9,16 @@ interface AuthScreenProps {
 
 export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
-  const [selectedRole, setSelectedRole] = useState<UserRole>('customer');
-
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [companyName, setCompanyName] = useState('');
+  const [selectedRole, setSelectedRole] = useState<UserRole>('customer');
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [infoMsg, setInfoMsg] = useState('');
-
-  const handleQuickFill = (role: UserRole) => {
-    setSelectedRole(role);
-    setPassword('EquipRent2026!');
-    if (role === 'customer') {
-      setEmail('jordan.miller@buildcorp.com');
-      setFullName('Jordan Miller');
-      setPhone('+63 912 345 6789');
-      setCompanyName('Apex Construction LLC');
-    } else if (role === 'staff') {
-      setEmail('marcus.tech@equiprent.com');
-      setFullName('Marcus Vance');
-      setPhone('+63 917 890 1234');
-      setCompanyName('EquipRent Operations');
-    } else {
-      setEmail('admin@equiprent.com');
-      setFullName('Alex Morgan');
-      setPhone('+63 918 555 4321');
-      setCompanyName('EquipRent Headquarters');
-    }
-    setErrorMsg('');
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,6 +29,12 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     try {
       if (mode === 'login') {
         const { profile } = await loginWithEmail(email, password);
+        if (profile.role !== selectedRole) {
+          await logoutUser();
+          throw new Error(
+            `This account is registered as ${profile.role}. Select that role to sign in.`
+          );
+        }
         onAuthenticated(profile);
       } else {
         if (!fullName.trim()) throw new Error('Please enter your full name.');
@@ -61,8 +45,9 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           email,
           password,
           fullName,
-          phone: phone || '+63 912 345 6789',
-          companyName: companyName || 'Enterprise Partner',
+          phone: formatPhilippinePhone(phone),
+          companyName,
+          requestedRole: selectedRole,
         });
 
         if (res.message) setInfoMsg(res.message);
@@ -75,7 +60,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         const normalizedMessage = msg.toLowerCase();
         if (normalizedMessage.includes('database error querying schema')) {
           setInfoMsg(
-            'Run supabase/fix_auth_and_seed_users.sql in your Supabase SQL Editor to repair demo accounts created by the old setup script, then try again.'
+            'Check your Supabase project logs and database setup. Do not rerun the full schema script on a project that already contains data.'
           );
         } else if (normalizedMessage.includes('invalid login credentials')) {
           setInfoMsg(
@@ -94,59 +79,10 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         {/* FinSet-style Circular Brand Header */}
         <div className="auth-finset-header">
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, justifyContent: 'center' }}>
-            <div className="brand-circle-logo">E</div>
             <span className="brand-name">Equip<span>Rent</span></span>
           </div>
           <h1 className="auth-finset-title">{mode === 'login' ? 'Welcome back!' : 'Create your account'}</h1>
-          <p className="auth-finset-sub">
-            {mode === 'login'
-              ? 'Sign in to your EquipRent account'
-              : 'Create a customer account to get started'}
-          </p>
         </div>
-
-        {/* ROLE SELECTION */}
-        {mode === 'login' && (
-          <div style={{ marginBottom: 18 }}>
-            <div className="auth-roles-grid-finset">
-              <button
-                type="button"
-                className={`auth-role-card-finset ${selectedRole === 'customer' ? 'active' : ''}`}
-                onClick={() => {
-                  setSelectedRole('customer');
-                  setErrorMsg('');
-                }}
-              >
-                <strong>Customer</strong>
-                <small>Browse &amp; rent fleet</small>
-              </button>
-
-              <button
-                type="button"
-                className={`auth-role-card-finset ${selectedRole === 'staff' ? 'active' : ''}`}
-                onClick={() => {
-                  setSelectedRole('staff');
-                  setErrorMsg('');
-                }}
-              >
-                <strong>Staff / Tech</strong>
-                <small>Dispatches &amp; checks</small>
-              </button>
-
-              <button
-                type="button"
-                className={`auth-role-card-finset ${selectedRole === 'admin' ? 'active' : ''}`}
-                onClick={() => {
-                  setSelectedRole('admin');
-                  setErrorMsg('');
-                }}
-              >
-                <strong>Admin / DBA</strong>
-                <small>Audits &amp; stress tests</small>
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* TABS */}
         <div className="auth-tabs-finset">
@@ -172,19 +108,9 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           </button>
         </div>
 
-        {/* QUICK FILL PRESETS */}
-        {mode === 'login' && (
-          <div className="quick-presets-finset">
-            <span>Quick fill:</span>
-            <button type="button" className="quick-preset-chip" onClick={() => handleQuickFill('customer')}>
-              Jordan (Customer)
-            </button>
-            <button type="button" className="quick-preset-chip" onClick={() => handleQuickFill('staff')}>
-              Marcus (Staff)
-            </button>
-            <button type="button" className="quick-preset-chip" onClick={() => handleQuickFill('admin')}>
-              Alex (Admin)
-            </button>
+        {!isSupabaseConfigured && (
+          <div style={{ padding: '10px 14px', borderRadius: 12, background: 'var(--red-bg)', color: 'var(--red-kpi)', fontSize: 12, fontWeight: 600, marginBottom: 14 }}>
+            Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env.local, then restart the app.
           </div>
         )}
 
@@ -200,6 +126,29 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         )}
 
         <form onSubmit={handleSubmit} className="auth-form-finset">
+          <fieldset className="auth-role-picker">
+            <legend>{mode === 'login' ? 'Sign in as' : 'Request account role'}</legend>
+            <div className="auth-roles-grid-finset">
+              {([
+                ['customer', 'Customer', 'Browse and rent equipment'],
+                ['staff', 'Staff', 'Request staff access'],
+                ['admin', 'Admin', 'Request administrator access'],
+              ] as const).map(([role, label, description]) => (
+                <button
+                  key={role}
+                  type="button"
+                  className={`auth-role-card-finset ${selectedRole === role ? 'active' : ''}`}
+                  aria-pressed={selectedRole === role}
+                  onClick={() => setSelectedRole(role)}
+                >
+                  <strong>{label}</strong>
+                  <small>{description}</small>
+                </button>
+              ))}
+            </div>
+
+          </fieldset>
+
           {mode === 'signup' && (
             <>
               <div className="form-group">
@@ -207,7 +156,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Jordan Miller"
+                  placeholder="Your full name"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                 />
@@ -218,16 +167,21 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                   <label>Contact Phone</label>
                   <input
                     type="tel"
-                    placeholder="+1-555-0103"
+                    required
+                    autoComplete="tel"
+                    inputMode="tel"
+                    maxLength={16}
+                    placeholder="+63 912 345 6789"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
+                    onBlur={() => setPhone((value) => formatPhilippinePhone(value))}
                   />
                 </div>
                 <div className="form-group">
                   <label>Company / Organization</label>
                   <input
                     type="text"
-                    placeholder="Apex Construction LLC"
+                    placeholder="Optional"
                     value={companyName}
                     onChange={(e) => setCompanyName(e.target.value)}
                   />
@@ -258,13 +212,13 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             />
           </div>
 
-          <button type="submit" className="auth-submit-purple" disabled={loading}>
+          <button type="submit" className="auth-submit-purple" disabled={loading || !isSupabaseConfigured}>
             {loading ? (
               'Connecting to Supabase...'
             ) : mode === 'login' ? (
-              `Sign In as ${selectedRole.toUpperCase()}`
+              'Sign In'
             ) : (
-              'Create Customer Account'
+              'Create Account'
             )}
           </button>
         </form>
@@ -299,9 +253,6 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
               </button>
             </p>
           )}
-          <div style={{ marginTop: 12, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', borderRadius: 20, background: '#f3f4f6', fontSize: 11, fontWeight: 600, color: '#4b5563' }}>
-            <span>{isSupabaseConfigured ? '🟢 Live Supabase PostgreSQL Connected' : '🟡 Local Mode'}</span>
-          </div>
         </div>
       </div>
     </div>

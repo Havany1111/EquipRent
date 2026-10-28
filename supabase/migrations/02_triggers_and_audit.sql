@@ -157,6 +157,7 @@ RETURNS TRIGGER AS $$
 DECLARE
     v_order_id UUID;
     v_new_subtotal NUMERIC(12, 2) := 0.00;
+    v_new_insurance NUMERIC(12, 2) := 0.00;
     v_new_tax NUMERIC(12, 2) := 0.00;
     v_tax_rate NUMERIC(4, 2) := 0.08; -- 8% sales / rental equipment tax
 BEGIN
@@ -172,13 +173,19 @@ BEGIN
     FROM rental_order_items
     WHERE rental_order_id = v_order_id;
 
-    v_new_tax := ROUND(v_new_subtotal * v_tax_rate, 2);
+    SELECT COALESCE(SUM(daily_insurance_rate * days_rented), 0.00)
+    INTO v_new_insurance
+    FROM rental_order_items
+    WHERE rental_order_id = v_order_id;
+
+    v_new_tax := ROUND((v_new_subtotal + v_new_insurance) * v_tax_rate, 2);
 
     -- Update parent order
     UPDATE rental_orders
     SET subtotal_amount = v_new_subtotal,
+        insurance_amount = v_new_insurance,
         tax_amount = v_new_tax,
-        total_amount = v_new_subtotal + v_new_tax + security_deposit_amount,
+        total_amount = v_new_subtotal + v_new_insurance + v_new_tax + security_deposit_amount,
         updated_at = NOW()
     WHERE id = v_order_id;
 
@@ -188,7 +195,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_recalc_order_financials ON rental_order_items;
 CREATE TRIGGER trg_recalc_order_financials
-AFTER INSERT OR UPDATE OF item_subtotal, unit_daily_rate, days_rented OR DELETE ON rental_order_items
+AFTER INSERT OR UPDATE OF item_subtotal, unit_daily_rate, daily_insurance_rate, days_rented OR DELETE ON rental_order_items
 FOR EACH ROW EXECUTE FUNCTION fn_recalculate_order_financials();
 
 -- ----------------------------------------------------------------------------

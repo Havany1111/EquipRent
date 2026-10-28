@@ -1,26 +1,9 @@
--- Run after full_schema_setup.sql.
+-- Configure signup profile linking and access after full_schema_setup.sql.
 -- Do not insert directly into Supabase's managed auth.users or auth.identities
 -- tables. Create users through Supabase Dashboard > Authentication > Users.
 
--- Repair demo accounts created by the previous version of this setup script.
--- That script inserted users without initializing these Auth token columns,
--- which can make password sign-in fail with "Database error querying schema".
-UPDATE auth.users
-SET confirmation_token = COALESCE(confirmation_token, ''),
-    email_change = COALESCE(email_change, ''),
-    email_change_token_new = COALESCE(email_change_token_new, ''),
-    recovery_token = COALESCE(recovery_token, '')
-WHERE email IN (
-    'admin@equiprent.com',
-    'marcus.tech@equiprent.com',
-    'jordan.miller@buildcorp.com'
-)
-AND (
-    confirmation_token IS NULL
-    OR email_change IS NULL
-    OR email_change_token_new IS NULL
-    OR recovery_token IS NULL
-);
+ALTER TABLE public.user_profiles
+    ADD COLUMN IF NOT EXISTS requested_role public.user_role_type;
 
 CREATE OR REPLACE FUNCTION public.handle_new_auth_user()
 RETURNS TRIGGER
@@ -37,19 +20,29 @@ BEGIN
         phone,
         company_name,
         role,
+        requested_role,
         account_status
     ) VALUES (
         NEW.id,
         NEW.id,
         COALESCE(NEW.raw_user_meta_data->>'full_name', split_part(NEW.email, '@', 1)),
         NEW.email,
-        COALESCE(NEW.raw_user_meta_data->>'phone', '+1-555-0100'),
-        COALESCE(NEW.raw_user_meta_data->>'company_name', 'Enterprise Client'),
+        COALESCE(NULLIF(NEW.raw_user_meta_data->>'phone', ''), ''),
+        NULLIF(NEW.raw_user_meta_data->>'company_name', ''),
         'customer',
+        CASE
+            WHEN NEW.raw_user_meta_data->>'requested_role' IN ('staff', 'admin')
+                THEN (NEW.raw_user_meta_data->>'requested_role')::public.user_role_type
+            ELSE NULL
+        END,
         'active'
     )
     ON CONFLICT (email) DO UPDATE
     SET auth_user_id = EXCLUDED.auth_user_id,
+        requested_role = CASE
+            WHEN public.user_profiles.role = 'customer'::public.user_role_type THEN EXCLUDED.requested_role
+            ELSE public.user_profiles.requested_role
+        END,
         updated_at = NOW();
 
     RETURN NEW;

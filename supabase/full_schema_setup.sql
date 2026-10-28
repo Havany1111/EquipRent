@@ -1,7 +1,7 @@
 -- ============================================================================
 -- EQUIPRENT DATABASE ENGINEERING SPECIFICATION
 -- ALL-IN-ONE MASTER DEPLOYMENT SCRIPT (FOR SUPABASE SQL EDITOR)
--- Runs all migrations in sequence: Schema -> Triggers -> Stored Procedures -> Views/RLS -> Seeds
+-- Builds the schema, triggers, stored procedures, views, and RLS policies.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -53,6 +53,7 @@ CREATE TABLE user_profiles (
     phone VARCHAR(30) NOT NULL,
     company_name VARCHAR(150),
     role user_role_type NOT NULL DEFAULT 'customer',
+    requested_role user_role_type,
     account_status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (account_status IN ('active', 'suspended', 'pending')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -76,7 +77,7 @@ CREATE TABLE equipment_categories (
     category_name VARCHAR(80) NOT NULL UNIQUE,
     category_code VARCHAR(20) NOT NULL UNIQUE,
     description TEXT,
-    base_daily_insurance_rate NUMERIC(10, 2) NOT NULL DEFAULT 25.00 CHECK (base_daily_insurance_rate >= 0),
+    base_daily_insurance_rate NUMERIC(10, 2) NOT NULL CHECK (base_daily_insurance_rate >= 0),
     requires_operator_certification BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -110,6 +111,7 @@ CREATE TABLE rental_orders (
     expected_end_date DATE NOT NULL,
     actual_return_date DATE,
     subtotal_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (subtotal_amount >= 0),
+    insurance_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (insurance_amount >= 0),
     tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (tax_amount >= 0),
     security_deposit_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (security_deposit_amount >= 0),
     total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (total_amount >= 0),
@@ -316,6 +318,7 @@ RETURNS TRIGGER AS $$
 DECLARE
     v_order_id UUID;
     v_new_subtotal NUMERIC(12, 2) := 0.00;
+    v_new_insurance NUMERIC(12, 2) := 0.00;
     v_new_tax NUMERIC(12, 2) := 0.00;
     v_tax_rate NUMERIC(4, 2) := 0.08;
 BEGIN
@@ -329,12 +332,17 @@ BEGIN
     FROM rental_order_items
     WHERE rental_order_id = v_order_id;
 
-    v_new_tax := ROUND(v_new_subtotal * v_tax_rate, 2);
+    SELECT COALESCE(SUM(daily_insurance_rate * days_rented), 0.00) INTO v_new_insurance
+    FROM rental_order_items
+    WHERE rental_order_id = v_order_id;
+
+    v_new_tax := ROUND((v_new_subtotal + v_new_insurance) * v_tax_rate, 2);
 
     UPDATE rental_orders
     SET subtotal_amount = v_new_subtotal,
+        insurance_amount = v_new_insurance,
         tax_amount = v_new_tax,
-        total_amount = v_new_subtotal + v_new_tax + security_deposit_amount,
+        total_amount = v_new_subtotal + v_new_insurance + v_new_tax + security_deposit_amount,
         updated_at = NOW()
     WHERE id = v_order_id;
 
@@ -342,7 +350,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_recalc_order_financials AFTER INSERT OR UPDATE OF item_subtotal, unit_daily_rate, days_rented OR DELETE ON rental_order_items FOR EACH ROW EXECUTE FUNCTION fn_recalculate_order_financials();
+CREATE TRIGGER trg_recalc_order_financials AFTER INSERT OR UPDATE OF item_subtotal, unit_daily_rate, daily_insurance_rate, days_rented OR DELETE ON rental_order_items FOR EACH ROW EXECUTE FUNCTION fn_recalculate_order_financials();
 
 CREATE OR REPLACE FUNCTION fn_guard_prevent_double_booking()
 RETURNS TRIGGER AS $$
@@ -733,19 +741,28 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
     INSERT INTO public.user_profiles (
-        id, auth_user_id, full_name, email, phone, company_name, role, account_status
+        id, auth_user_id, full_name, email, phone, company_name, role, requested_role, account_status
     ) VALUES (
         NEW.id,
         NEW.id,
         COALESCE(NEW.raw_user_meta_data->>'full_name', split_part(NEW.email, '@', 1)),
         NEW.email,
-        COALESCE(NEW.raw_user_meta_data->>'phone', '+1-555-0100'),
-        COALESCE(NEW.raw_user_meta_data->>'company_name', 'Enterprise Client'),
+        COALESCE(NULLIF(NEW.raw_user_meta_data->>'phone', ''), ''),
+        NULLIF(NEW.raw_user_meta_data->>'company_name', ''),
         'customer',
+        CASE
+            WHEN NEW.raw_user_meta_data->>'requested_role' IN ('staff', 'admin')
+                THEN (NEW.raw_user_meta_data->>'requested_role')::user_role_type
+            ELSE NULL
+        END,
         'active'
     )
     ON CONFLICT (email) DO UPDATE
     SET auth_user_id = EXCLUDED.auth_user_id,
+        requested_role = CASE
+            WHEN public.user_profiles.role = 'customer'::user_role_type THEN EXCLUDED.requested_role
+            ELSE public.user_profiles.requested_role
+        END,
         updated_at = NOW();
 
     RETURN NEW;
@@ -760,101 +777,4 @@ CREATE TRIGGER on_auth_user_created
 
 
 -- ----------------------------------------------------------------------------
--- STEP 6: SEED DATA
--- ----------------------------------------------------------------------------
-DO $$
-DECLARE
-    uid_admin UUID := 'a0000000-0000-0000-0000-000000000001';
-    uid_staff UUID := 'b0000000-0000-0000-0000-000000000002';
-    uid_cust1 UUID := 'c0000000-0000-0000-0000-000000000003';
-    uid_cust2 UUID := 'c0000000-0000-0000-0000-000000000004';
-
-    wh_metro UUID := 'b1000000-0000-0000-0000-000000000001';
-    wh_north UUID := 'b1000000-0000-0000-0000-000000000002';
-    wh_west  UUID := 'b1000000-0000-0000-0000-000000000003';
-
-    cat_heavy UUID := 'e1000000-0000-0000-0000-000000000001';
-    cat_earth UUID := 'e1000000-0000-0000-0000-000000000002';
-    cat_mat   UUID := 'e1000000-0000-0000-0000-000000000003';
-    cat_power UUID := 'e1000000-0000-0000-0000-000000000004';
-
-    eq_cat320 UUID := 'e2000000-0000-0000-0000-000000000001';
-    eq_ctl    UUID := 'e2000000-0000-0000-0000-000000000002';
-    eq_mini   UUID := 'e2000000-0000-0000-0000-000000000003';
-    eq_loader UUID := 'e2000000-0000-0000-0000-000000000004';
-    eq_dozer  UUID := 'e2000000-0000-0000-0000-000000000005';
-    eq_genie  UUID := 'e2000000-0000-0000-0000-000000000006';
-
-    ord_1 UUID := 'd1000000-0000-0000-0000-000000000001';
-    ord_2 UUID := 'd1000000-0000-0000-0000-000000000002';
-    ord_3 UUID := 'd1000000-0000-0000-0000-000000000003';
-
-    maint_1 UUID := 'f1000000-0000-0000-0000-000000000001';
-BEGIN
-    INSERT INTO user_profiles (id, full_name, email, phone, company_name, role)
-    VALUES
-        (uid_admin, 'Alex Morgan', 'admin@equiprent.com', '+1-555-0101', 'EquipRent Headquarters', 'admin'),
-        (uid_staff, 'Marcus Vance', 'marcus.tech@equiprent.com', '+1-555-0102', 'EquipRent Operations', 'staff'),
-        (uid_cust1, 'Jordan Miller', 'jordan.miller@buildcorp.com', '+1-555-0103', 'Apex Construction LLC', 'customer'),
-        (uid_cust2, 'Elena Rostova', 'elena@novainfra.com', '+1-555-0104', 'Nova Infrastructure Partners', 'customer')
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO warehouse_locations (id, branch_code, branch_name, address, city, region, contact_phone, manager_id, max_storage_capacity)
-    VALUES
-        (wh_metro, 'DEP-METRO-01', 'Central Metro Depot', '4400 Logistics Blvd', 'Denver', 'Colorado', '+1-303-555-0180', uid_admin, 150),
-        (wh_north, 'DEP-NORTH-02', 'North Valley Storage Yard', '890 Quarry Way', 'Boulder', 'Colorado', '+1-303-555-0182', uid_staff, 90),
-        (wh_west,  'DEP-WEST-03',  'West Ridge Industrial Park', '1240 Industrial Park Rd', 'Golden', 'Colorado', '+1-303-555-0185', uid_staff, 120)
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO equipment_categories (id, category_name, category_code, description, base_daily_insurance_rate, requires_operator_certification)
-    VALUES
-        (cat_heavy, 'Heavy Machinery', 'CAT-HVY', 'Full-size excavators, bulldozers, and heavy crawler cranes', 45.00, true),
-        (cat_earth, 'Earthmoving', 'CAT-EAR', 'Compact track loaders, mini excavators, and trenchers', 30.00, false),
-        (cat_mat,   'Material Handling', 'CAT-MTH', 'Wheel loaders, telehandlers, and rough terrain forklifts', 35.00, false),
-        (cat_power, 'Power & Generation', 'CAT-PWR', 'Industrial diesel generators and mobile power substations', 20.00, false)
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO equipment (id, serial_number, model_name, manufacturer, model_year, category_id, warehouse_id, daily_rental_rate, replacement_value, operational_hours, current_status, image_url, maintenance_interval_hours)
-    VALUES
-        (eq_cat320, 'CAT-320-X8910', 'CAT 320 Hydraulic Excavator', 'Caterpillar Inc.', 2023, cat_heavy, wh_metro, 485.00, 240000.00, 412.50, 'available', 'https://images.unsplash.com/photo-1503708928676-1cb796a0891e?auto=format&fit=crop&w=900&q=85', 250.00),
-        (eq_ctl,    'CTL-TL8-9941', 'Takeuchi TL8 Track Loader', 'Takeuchi Mfg.', 2022, cat_earth, wh_metro, 295.00, 78000.00, 185.00, 'rented', 'https://images.unsplash.com/photo-1583024011792-b165975b52f5?auto=format&fit=crop&w=900&q=85', 200.00),
-        (eq_mini,   'KUB-KX040-4', 'Kubota KX040-4 Mini Excavator', 'Kubota Corp.', 2024, cat_heavy, wh_north, 340.00, 92000.00, 310.00, 'under_maintenance', 'https://images.unsplash.com/photo-1495036019936-220b29b930ea?auto=format&fit=crop&w=900&q=85', 250.00),
-        (eq_loader, 'KOM-WA270-8', 'Komatsu WA270-8 Wheel Loader', 'Komatsu Ltd.', 2023, cat_mat, wh_west, 420.00, 185000.00, 240.00, 'available', 'https://images.unsplash.com/photo-1580901369227-308f6f40bdeb?auto=format&fit=crop&w=900&q=85', 300.00),
-        (eq_dozer,  'CAT-D6-T2901', 'CAT D6T Crawler Dozer', 'Caterpillar Inc.', 2022, cat_heavy, wh_north, 650.00, 380000.00, 720.00, 'available', 'https://images.unsplash.com/photo-1578575437130-527eed3abbec?auto=format&fit=crop&w=900&q=85', 300.00),
-        (eq_genie,  'GEN-Z45-8812', 'Genie Z-45 Articulated Boom', 'Terex Corp.', 2023, cat_power, wh_metro, 220.00, 65000.00, 95.00, 'available', 'https://images.unsplash.com/photo-1541888946425-d0fbb186c5f8?auto=format&fit=crop&w=900&q=85', 250.00)
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO rental_orders (id, order_number, customer_id, authorized_staff_id, status, order_date, expected_start_date, expected_end_date, subtotal_amount, tax_amount, security_deposit_amount, total_amount, payment_status, delivery_address)
-    VALUES
-        (ord_1, 'ORD-2026-08101', uid_cust1, uid_staff, 'in_progress', NOW() - INTERVAL '3 days', CURRENT_DATE - 3, CURRENT_DATE + 4, 885.00, 70.80, 500.00, 1455.80, 'paid', '740 Quarry Site Road, Golden CO'),
-        (ord_2, 'ORD-2026-08102', uid_cust2, uid_staff, 'confirmed', NOW() - INTERVAL '1 day', CURRENT_DATE + 2, CURRENT_DATE + 7, 1940.00, 155.20, 800.00, 2895.20, 'partially_paid', 'Interstate 70 Bridge Expansion Jobsite'),
-        (ord_3, 'ORD-2026-08103', uid_cust1, NULL, 'draft', NOW(), CURRENT_DATE + 5, CURRENT_DATE + 9, 0.00, 0.00, 0.00, 0.00, 'unpaid', 'Apex Downtown Commercial Tower')
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO rental_order_items (id, rental_order_id, equipment_id, unit_daily_rate, days_rented, daily_insurance_rate, item_subtotal, item_status, dispatch_odometer_hours, dispatched_at)
-    VALUES
-        (gen_random_uuid(), ord_1, eq_ctl, 295.00, 3, 30.00, 885.00, 'dispatched', 185.00, NOW() - INTERVAL '3 days')
-    ON CONFLICT DO NOTHING;
-
-    INSERT INTO rental_order_items (id, rental_order_id, equipment_id, unit_daily_rate, days_rented, daily_insurance_rate, item_subtotal, item_status)
-    VALUES
-        (gen_random_uuid(), ord_2, eq_cat320, 485.00, 4, 45.00, 1940.00, 'reserved')
-    ON CONFLICT DO NOTHING;
-
-    INSERT INTO payment_transactions (rental_order_id, transaction_reference, payment_method, amount, transaction_status)
-    VALUES
-        (ord_1, 'TXN-DEP-2026-8891', 'credit_card', 1455.80, 'succeeded'),
-        (ord_2, 'TXN-DEP-2026-8892', 'corporate_credit', 800.00, 'succeeded')
-    ON CONFLICT DO NOTHING;
-
-    INSERT INTO maintenance_records (id, work_order_number, equipment_id, maintenance_type, maintenance_status, scheduled_date, odometer_hours_at_service, parts_cost, labor_cost, total_maintenance_cost, lead_technician_id, service_description)
-    VALUES
-        (maint_1, 'WO-20260812-001', eq_mini, 'scheduled_routine', 'in_progress', CURRENT_DATE - 1, 310.00, 240.00, 350.00, 590.00, uid_staff, '300-hour hydraulic fluid flush, seal replacement, and track tensioning calibration')
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO maintenance_tasks (maintenance_id, technician_id, task_code, task_name, hours_logged, hourly_labor_rate, progress_status, findings_report)
-    VALUES
-        (maint_1, uid_staff, 'TASK-HYD-FLUSH', 'Hydraulic System Purge & Fluid Exchange', 3.5, 75.00, 'completed', 'Drained 18 gal contaminated hydraulic fluid. Replaced high-pressure line filter.'),
-        (maint_1, uid_staff, 'TASK-TRK-CALIB', 'Rubber Track Tension & Sprocket Alignment', 1.5, 75.00, 'in_progress', 'Left idler tension within spec; adjusting right tension spring')
-    ON CONFLICT DO NOTHING;
-END $$;
+-- Data remains empty until users create accounts and operators add live records.

@@ -18,17 +18,26 @@ import {
   executeEquipmentReturn,
   fetchMaintenanceRecords,
   fetchAuditLogs,
-  runParentDeletionStressTest,
   getCurrentUserProfile,
   logoutUser,
   updateUserProfile,
 } from './lib/supabase';
 import { AuthScreen } from './components/AuthScreen';
+import { LoadingScreen } from './components/LoadingScreen';
+import { formatPHP, formatPhilippinePhone } from './lib/formatters';
+
+const toDateInputValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 export default function App() {
   // Authentication & Session State from Supabase
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
+  const [dashboardDataLoaded, setDashboardDataLoaded] = useState(false);
 
   // User role is strictly bound to authenticated Supabase user profile
   const currentRole: UserRole = currentUser?.role || 'customer';
@@ -45,32 +54,26 @@ export default function App() {
     });
   }, []);
 
-  const activeUser = currentUser || {
-    id: 'guest',
-    full_name: 'EquipRent User',
-    email: 'user@equiprent.com',
-    phone: '+1-555-0100',
-    company_name: 'Enterprise Client',
-    role: 'customer' as UserRole,
-    account_status: 'active' as const,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
-
   const handleLogout = async () => {
-    await logoutUser();
-    setCurrentUser(null);
-    showToast('Signed out of session.');
+    try {
+      await logoutUser();
+      setCurrentUser(null);
+      setDashboardDataLoaded(false);
+      showToast('Signed out of session.');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Could not sign out.');
+    }
   };
 
   // Active navigation tab
   const [activeTab, setActiveTab] = useState('Dashboard');
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All equipment');
-  const [maxPrice, setMaxPrice] = useState<number>(1000);
+  const [maxPrice, setMaxPrice] = useState<number | null>(null);
   const [toast, setToast] = useState('');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [reservationUpdating, setReservationUpdating] = useState(false);
+  const [dataLoadError, setDataLoadError] = useState('');
 
   // Domain data states (100% Pure Supabase)
   const [equipmentList, setEquipmentList] = useState<Equipment[]>([]);
@@ -81,17 +84,18 @@ export default function App() {
   // Modal states
   const [rentingEquipment, setRentingEquipment] = useState<Equipment | null>(null);
   const [returningItemId, setReturningItemId] = useState<string | null>(null);
-  const [defenseLog, setDefenseLog] = useState<{ title: string; detail: string; status: 'ok' | 'error' } | null>(null);
 
   // Booking form state
-  const [bookDays, setBookDays] = useState(3);
-  const [bookStartDate, setBookStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [bookAddress, setBookAddress] = useState('450 Quarry Industrial Park, Golden CO');
-  const [bookPhone, setBookPhone] = useState('+1-555-0103');
+  const [bookDays, setBookDays] = useState('');
+  const [bookStartDate, setBookStartDate] = useState(toDateInputValue(new Date()));
+  const [bookAddress, setBookAddress] = useState('');
 
   // Availability Calendar state
   const [calEquipId, setCalEquipId] = useState<string>('');
-  const [calSelectedDate, setCalSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [calSelectedDate, setCalSelectedDate] = useState<string>(toDateInputValue(new Date()));
+  const [calendarMonth, setCalendarMonth] = useState(
+    () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  );
 
   // Customer Profile Form state
   const [profileName, setProfileName] = useState('');
@@ -101,29 +105,30 @@ export default function App() {
 
   // Sync profile form when user changes
   useEffect(() => {
-    if (activeUser) {
-      setProfileName(activeUser.full_name || '');
-      setProfilePhone(activeUser.phone || '');
-      setProfileCompany(activeUser.company_name || '');
+    if (currentUser) {
+      setProfileName(currentUser.full_name);
+      setProfilePhone(currentUser.phone);
+      setProfileCompany(currentUser.company_name || '');
     }
-  }, [activeUser]);
+  }, [currentUser]);
 
   // Return inspection form state
-  const [returnOdometer, setReturnOdometer] = useState<number>(200);
-  const [returnFuel, setReturnFuel] = useState<number>(90);
-  const [returnCleanliness, setReturnCleanliness] = useState<number>(4);
-  const [returnIntegrity, setReturnIntegrity] = useState<number>(5);
+  const [returnOdometer, setReturnOdometer] = useState('');
+  const [returnFuel, setReturnFuel] = useState('');
+  const [returnCleanliness, setReturnCleanliness] = useState('');
+  const [returnIntegrity, setReturnIntegrity] = useState('');
   const [damageNotes, setDamageNotes] = useState<string>('');
-  const [penaltyFee, setPenaltyFee] = useState<number>(0);
+  const [penaltyFee, setPenaltyFee] = useState('');
 
   // Load all database entities directly from Supabase
   const reloadData = async () => {
+    if (!currentUser) return;
     try {
       const [eq, ord, maint, logs] = await Promise.all([
         fetchEquipmentList(),
-        fetchRentalOrders(currentRole === 'customer' ? activeUser.id : undefined),
-        fetchMaintenanceRecords(),
-        fetchAuditLogs(),
+        fetchRentalOrders(currentRole === 'customer' ? currentUser.id : undefined),
+        currentRole === 'customer' ? Promise.resolve([]) : fetchMaintenanceRecords(),
+        currentRole === 'admin' ? fetchAuditLogs() : Promise.resolve([]),
       ]);
       setEquipmentList(eq);
       if (eq.length > 0 && !calEquipId) {
@@ -132,8 +137,14 @@ export default function App() {
       setOrders(ord);
       setMaintenance(maint);
       setAuditLogs(logs);
+      setDataLoadError('');
     } catch (e: unknown) {
       console.error('Supabase reloadData error:', e);
+      setDataLoadError(
+        e instanceof Error ? e.message : 'Could not load data from Supabase.'
+      );
+    } finally {
+      setDashboardDataLoaded(true);
     }
   };
 
@@ -145,18 +156,19 @@ export default function App() {
 
   // Computed live metrics from Supabase database
   const totalFleet = equipmentList.length;
+  const maximumDailyRate = Math.max(...equipmentList.map((item) => item.daily_rental_rate), 0);
   const availableEquipment = useMemo(() => equipmentList.filter((e) => e.current_status === 'available'), [equipmentList]);
   const rentedEquipment = useMemo(() => equipmentList.filter((e) => e.current_status === 'rented'), [equipmentList]);
   const maintenanceEquipment = useMemo(() => equipmentList.filter((e) => e.current_status === 'under_maintenance'), [equipmentList]);
 
   const totalFleetValuation = useMemo(() => {
-    return equipmentList.reduce((acc, e) => acc + (e.replacement_value || 0), 0);
+    return equipmentList.reduce((acc, e) => acc + e.replacement_value, 0);
   }, [equipmentList]);
 
   const totalRentalRevenue = useMemo(() => {
     return orders
       .filter((o) => o.status !== 'cancelled')
-      .reduce((acc, o) => acc + (o.total_amount || 0), 0);
+      .reduce((acc, o) => acc + o.total_amount, 0);
   }, [orders]);
 
   const activeContracts = useMemo(() => {
@@ -171,7 +183,7 @@ export default function App() {
   const categoriesMap = useMemo(() => {
     const map: Record<string, { total: number; available: number; rented: number }> = {};
     for (const item of equipmentList) {
-      const cat = item.category?.category_name || 'Heavy Equipment';
+      const cat = item.category?.category_name || 'Uncategorized';
       if (!map[cat]) map[cat] = { total: 0, available: 0, rented: 0 };
       map[cat].total += 1;
       if (item.current_status === 'available') map[cat].available += 1;
@@ -184,7 +196,7 @@ export default function App() {
   const navTabs = useMemo(() => {
     if (currentRole === 'customer') {
       return [
-        { label: 'Dashboard', badge: '1' },
+        { label: 'Dashboard' },
         { label: 'Browse Equipment' },
         { label: 'Availability Calendar' },
         { label: 'My Reservations', badge: orders.length ? String(orders.length) : undefined },
@@ -194,7 +206,7 @@ export default function App() {
     if (currentRole === 'staff') {
       const pendingReviewCount = orders.filter((o) => o.status === 'draft').length;
       return [
-        { label: 'Dashboard', badge: '1' },
+        { label: 'Dashboard' },
         { label: 'Fleet Inventory' },
         { label: 'Reservation Review', badge: pendingReviewCount ? String(pendingReviewCount) : undefined },
         { label: 'Dispatch & Checkout' },
@@ -205,12 +217,11 @@ export default function App() {
     }
     // Admin
     return [
-      { label: 'Dashboard', badge: '1' },
+      { label: 'Dashboard' },
       { label: 'Fleet Inventory' },
       { label: 'Reservation Review' },
       { label: 'Maintenance Oversight' },
       { label: 'Engine Audit Logs', badge: auditLogs.length ? String(auditLogs.length) : undefined },
-      { label: 'Architectural Defense Lab' },
       { label: 'My Profile' },
     ];
   }, [currentRole, orders, maintenance.length, auditLogs.length]);
@@ -222,17 +233,32 @@ export default function App() {
 
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!rentingEquipment) return;
+    if (!rentingEquipment || !currentUser) return;
     try {
-      const start = new Date(bookStartDate);
-      const end = new Date(start.getTime() + bookDays * 86400000);
+      const parsedDays = Number(bookDays);
+      if (bookDays === '' || !Number.isInteger(parsedDays) || parsedDays < 1 || parsedDays > 30) {
+        throw new Error('Rental duration must be between 1 and 30 days.');
+      }
+      if (!bookAddress.trim()) {
+        throw new Error('Enter the job site or delivery address.');
+      }
+      const start = new Date(`${bookStartDate}T00:00:00`);
+      if (Number.isNaN(start.getTime())) {
+        throw new Error('Choose a valid rental start date.');
+      }
+      const end = new Date(start.getTime() + parsedDays * 86400000);
+      const dailyInsuranceRate = rentingEquipment.category?.base_daily_insurance_rate;
+      if (dailyInsuranceRate === undefined) {
+        throw new Error('This equipment has no insurance rate configured in Supabase.');
+      }
       await createRentalOrder({
-        customerId: activeUser.id,
+        customerId: currentUser.id,
         equipmentId: rentingEquipment.id,
         unitDailyRate: rentingEquipment.daily_rental_rate,
-        days: bookDays,
-        startDate: start.toISOString().split('T')[0],
-        endDate: end.toISOString().split('T')[0],
+        dailyInsuranceRate,
+        days: parsedDays,
+        startDate: toDateInputValue(start),
+        endDate: toDateInputValue(end),
         deliveryAddress: bookAddress,
       });
       showToast(`Reservation submitted for ${rentingEquipment.model_name}!`);
@@ -283,10 +309,11 @@ export default function App() {
     e.preventDefault();
     setProfileSaving(true);
     try {
+      if (!currentUser) return;
       const updated = await updateUserProfile({
-        id: activeUser.id,
+        id: currentUser.id,
         fullName: profileName,
-        phone: profilePhone,
+        phone: formatPhilippinePhone(profilePhone),
         companyName: profileCompany,
       });
       setCurrentUser(updated);
@@ -299,8 +326,9 @@ export default function App() {
   };
 
   const handleDispatchCheckout = async (orderId: string) => {
+    if (!currentUser) return;
     try {
-      await executeRentalDispatch(orderId, activeUser.id);
+      await executeRentalDispatch(orderId, currentUser.id);
       showToast('Dispatched: Status updated to active in Supabase!');
       await reloadData();
     } catch (err: unknown) {
@@ -310,19 +338,34 @@ export default function App() {
 
   const handleReturnSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!returningItemId) return;
+    if (!returningItemId || !currentUser) return;
     try {
-      const orderItem = orders.flatMap((o) => o.items || []).find((it) => it.id === returningItemId);
+      if (returnOdometer === '' || returnFuel === '' || returnCleanliness === '' || returnIntegrity === '') {
+        throw new Error('Enter the observed odometer, fuel level, cleanliness, and integrity before submitting.');
+      }
+      const parsedOdometer = Number(returnOdometer);
+      const parsedFuel = Number(returnFuel);
+      const parsedCleanliness = Number(returnCleanliness);
+      const parsedIntegrity = Number(returnIntegrity);
+      const parsedPenaltyFee = penaltyFee === '' ? 0 : Number(penaltyFee);
+      if (
+        !Number.isFinite(parsedOdometer) || parsedOdometer < 0 ||
+        !Number.isInteger(parsedFuel) || parsedFuel < 0 || parsedFuel > 100 ||
+        !Number.isInteger(parsedCleanliness) || parsedCleanliness < 1 || parsedCleanliness > 5 ||
+        !Number.isInteger(parsedIntegrity) || parsedIntegrity < 1 || parsedIntegrity > 5 ||
+        !Number.isFinite(parsedPenaltyFee) || parsedPenaltyFee < 0
+      ) {
+        throw new Error('Enter valid inspection values within the displayed ranges.');
+      }
       const res = await executeEquipmentReturn({
         orderItemId: returningItemId,
-        equipmentId: orderItem?.equipment_id,
-        returnOdometer,
-        fuelLevel: returnFuel,
-        cleanliness: returnCleanliness,
-        integrity: returnIntegrity,
-        inspectorId: activeUser.id,
+        returnOdometer: parsedOdometer,
+        fuelLevel: parsedFuel,
+        cleanliness: parsedCleanliness,
+        integrity: parsedIntegrity,
+        inspectorId: currentUser.id,
         damageNotes: damageNotes || undefined,
-        penaltyFee: penaltyFee > 0 ? penaltyFee : undefined,
+        penaltyFee: parsedPenaltyFee,
       });
       showToast(
         res.maintenanceCreated
@@ -330,31 +373,26 @@ export default function App() {
           : 'Equipment inspected, returned & status set to Available in Supabase!'
       );
       setReturningItemId(null);
+      setReturnOdometer('');
+      setReturnFuel('');
+      setReturnCleanliness('');
+      setReturnIntegrity('');
+      setDamageNotes('');
+      setPenaltyFee('');
       await reloadData();
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Return inspection failed');
     }
   };
 
-  const testParentDeletionConstraint = async () => {
-    const target = equipmentList[0];
-    if (!target) return;
-    const res = await runParentDeletionStressTest(target.id);
-    setDefenseLog({
-      title: 'Architectural "What-If" Stress Test: Parent Row Deletion',
-      detail: `Attempted SQL: DELETE FROM equipment WHERE id = '${target.id}';\n\nEngine Result: ${res.message}\nConstraint Enforced: ${res.sqlConstraint}\nSystem Health: SAFE. Zero unhandled backend crashes.`,
-      status: 'ok',
-    });
-  };
-
   const visibleEquipment = useMemo(() => {
     return equipmentList.filter((item) => {
-      const matchesCat =
+        const matchesCat =
         category === 'All equipment' || item.category?.category_name === category;
       const matchesQuery =
         item.model_name.toLowerCase().includes(query.toLowerCase()) ||
         item.manufacturer.toLowerCase().includes(query.toLowerCase());
-      const matchesPrice = item.daily_rental_rate <= maxPrice;
+      const matchesPrice = maxPrice === null || item.daily_rental_rate <= maxPrice;
       return matchesCat && matchesQuery && matchesPrice;
     });
   }, [equipmentList, category, query, maxPrice]);
@@ -362,13 +400,53 @@ export default function App() {
   const selectedCalEquip = useMemo(() => {
     return equipmentList.find((e) => e.id === calEquipId) || equipmentList[0];
   }, [equipmentList, calEquipId]);
+  const isEquipmentBookedOnDate = (equipmentId: string, date: string) =>
+    orders.some(
+      (order) =>
+        order.status !== 'cancelled' &&
+        order.status !== 'completed' &&
+        order.items?.some((item) => item.equipment_id === equipmentId) &&
+        order.expected_start_date <= date &&
+        date <= order.expected_end_date
+    );
+  const hasMaintenanceOnDate = (equipmentId: string, date: string) =>
+    maintenance.some(
+      (record) =>
+        record.equipment_id === equipmentId &&
+        record.scheduled_date === date &&
+        record.maintenance_status !== 'completed' &&
+        record.maintenance_status !== 'cancelled'
+    );
+  const todayDate = toDateInputValue(new Date());
+  const selectedDateBlocked = Boolean(
+    selectedCalEquip &&
+      (selectedCalEquip.current_status === 'decommissioned' ||
+      selectedCalEquip.current_status === 'under_maintenance' ||
+      isEquipmentBookedOnDate(selectedCalEquip.id, calSelectedDate) ||
+        hasMaintenanceOnDate(selectedCalEquip.id, calSelectedDate) ||
+        (calSelectedDate === todayDate && selectedCalEquip.current_status !== 'available'))
+  );
+  const calendarYear = calendarMonth.getFullYear();
+  const calendarMonthIndex = calendarMonth.getMonth();
+  const calendarMonthLabel = calendarMonth.toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric',
+  });
+  const calendarDates = Array.from({ length: 42 }, (_, index) =>
+    new Date(calendarYear, calendarMonthIndex, index - new Date(calendarYear, calendarMonthIndex, 1).getDay() + 1)
+  );
+  const bookingInsuranceRate = rentingEquipment?.category?.base_daily_insurance_rate;
+  const bookingDays = Number(bookDays) || 0;
+  const bookingSubtotal = rentingEquipment ? rentingEquipment.daily_rental_rate * bookingDays : 0;
+  const bookingInsurance = (bookingInsuranceRate ?? 0) * bookingDays;
+  const bookingTax = Math.round((bookingSubtotal + bookingInsurance) * 0.08 * 100) / 100;
+
+  if (!isSupabaseConfigured) {
+    return <AuthScreen onAuthenticated={setCurrentUser} />;
+  }
 
   if (authChecking) {
-    return (
-      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--canvas-outer)', color: '#fff' }}>
-        <p style={{ font: '700 15px "Plus Jakarta Sans"' }}>Loading EquipRent Enterprise Session...</p>
-      </div>
-    );
+    return <LoadingScreen message="Restoring your session..." />;
   }
 
   if (!currentUser) {
@@ -381,6 +459,12 @@ export default function App() {
       />
     );
   }
+
+  if (!dashboardDataLoaded) {
+    return <LoadingScreen message="Loading your dashboard..." />;
+  }
+
+  const activeUser = currentUser;
 
   return (
     <div className="outer-lavender-wrap">
@@ -396,7 +480,6 @@ export default function App() {
           {/* FinSet-style Circular Brand Header */}
           <div className="finset-brand">
             <div className="brand-left">
-              <div className="brand-circle-logo">E</div>
               <span className="brand-name">Equip<span>Rent</span></span>
             </div>
             <div
@@ -407,6 +490,16 @@ export default function App() {
               &lsaquo;
             </div>
           </div>
+          {dataLoadError && (
+            <div role="alert" style={{ padding: 12, marginBottom: 16, borderRadius: 12, background: 'var(--red-bg)', color: 'var(--red-kpi)' }}>
+              Could not load the latest Supabase data: {dataLoadError}
+            </div>
+          )}
+          {activeUser.requested_role && activeUser.role !== activeUser.requested_role && (
+            <div role="status" style={{ padding: 12, marginBottom: 16, borderRadius: 12, background: 'var(--purple-light)', color: 'var(--purple-main)' }}>
+              Your request for the {activeUser.requested_role} role is pending administrator approval. Your current access remains Customer.
+            </div>
+          )}
 
           {/* Navigation Items */}
           <nav className="finset-nav">
@@ -530,7 +623,7 @@ export default function App() {
                 }}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                <span>Defense Benchmarks</span>
+                <span>Data Integrity</span>
               </button>
             )}
 
@@ -569,7 +662,6 @@ export default function App() {
                 ☰
               </button>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div className="brand-circle-logo" style={{ width: 28, height: 28, fontSize: 13 }}>E</div>
                 <span className="brand-name" style={{ fontSize: 16 }}>Equip<span>Rent</span></span>
               </div>
             </div>
@@ -593,10 +685,6 @@ export default function App() {
               </p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 11, fontWeight: 800, padding: '6px 14px', borderRadius: 16, background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981' }} />
-                Supabase Live Database
-              </span>
               <button
                 className="outline-pill-btn"
                 onClick={reloadData}
@@ -627,7 +715,7 @@ export default function App() {
                     {totalFleet} <span style={{ fontSize: 16 }}>Units</span>
                   </div>
                   <div className="kpi-bottom-row">
-                    <span className="kpi-pill green">${totalFleetValuation.toLocaleString()} Value</span>
+                    <span className="kpi-pill green">{formatPHP(totalFleetValuation)} Value</span>
                     <span className="kpi-vs-text">{availableEquipment.length} ready in yard</span>
                   </div>
                 </div>
@@ -664,7 +752,7 @@ export default function App() {
                     <div className="kpi-arrow-circle" title="View ledger">&nearr;</div>
                   </div>
                   <div className="kpi-main-stat">
-                    ${totalRentalRevenue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                    {formatPHP(totalRentalRevenue)}
                   </div>
                   <div className="kpi-bottom-row">
                     <span className="kpi-pill green">{orders.length} Contracts</span>
@@ -693,7 +781,6 @@ export default function App() {
                   </div>
                 </div>
               </div>
-
               {/* MIDDLE SECTION: REAL LIVE CATEGORY BREAKDOWN + OPERATIONAL ACTION HUB */}
               <div className="middle-dashboard-grid">
                 {/* Left: Real Category Breakdown */}
@@ -781,17 +868,23 @@ export default function App() {
                             }}
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                              <img
-                                src={item.image_url || ''}
-                                alt={item.model_name}
-                                style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }}
-                              />
+                              {item.image_url ? (
+                                <img
+                                  src={item.image_url}
+                                  alt={item.model_name}
+                                  style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }}
+                                />
+                              ) : (
+                                <div className="fleet-image-placeholder" aria-hidden="true">
+                                  {item.model_name.slice(0, 1)}
+                                </div>
+                              )}
                               <div>
                                 <h5 style={{ margin: 0, fontSize: 13, fontWeight: 800, color: '#111827' }}>
                                   {item.model_name}
                                 </h5>
                                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                  ${item.daily_rental_rate}/day &bull; {item.manufacturer}
+                                  {formatPHP(item.daily_rental_rate)}/day &bull; {item.manufacturer}
                                 </span>
                               </div>
                             </div>
@@ -801,7 +894,7 @@ export default function App() {
                               style={{ padding: '6px 14px', fontSize: 11 }}
                               onClick={() => {
                                 setRentingEquipment(item);
-                                setBookStartDate(new Date().toISOString().split('T')[0]);
+                                setBookStartDate(toDateInputValue(new Date()));
                               }}
                             >
                               Reserve
@@ -809,9 +902,14 @@ export default function App() {
                           </div>
                         ))}
 
-                        {availableEquipment.length === 0 && (
+                        {availableEquipment.length === 0 && equipmentList.length > 0 && (
                           <p style={{ color: 'var(--text-muted)', fontSize: 12, textAlign: 'center', padding: 18 }}>
-                            All machines are currently deployed. Check back soon!
+                            No equipment is currently available to rent.
+                          </p>
+                        )}
+                        {equipmentList.length === 0 && (
+                          <p style={{ color: 'var(--text-muted)', fontSize: 12, textAlign: 'center', padding: 18 }}>
+                            No equipment is listed in Supabase yet.
                           </p>
                         )}
 
@@ -953,10 +1051,10 @@ export default function App() {
                         {orders.slice(0, 4).map((ord) => (
                           <tr key={ord.id}>
                             <td><strong>{ord.order_number}</strong></td>
-                            <td>{ord.customer?.full_name || 'Customer'}</td>
+                            <td>{ord.customer?.full_name || '—'}</td>
                             <td>{ord.expected_start_date} &rarr; {ord.expected_end_date}</td>
                             <td style={{ fontWeight: 800, color: 'var(--purple-main)' }}>
-                              ${ord.total_amount?.toFixed(2) || '0.00'}
+                              {formatPHP(ord.total_amount)}
                             </td>
                             <td>
                               <span style={{
@@ -1019,7 +1117,7 @@ export default function App() {
                         <div>
                           <strong style={{ fontSize: 12, color: '#111827' }}>{item.model_name}</strong>
                           <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                            ${item.daily_rental_rate}/day &bull; {item.manufacturer}
+                            {formatPHP(item.daily_rental_rate)}/day &bull; {item.manufacturer}
                           </div>
                         </div>
 
@@ -1053,7 +1151,7 @@ export default function App() {
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   <input
                     type="text"
-                    placeholder="Search model, Caterpillar, Bobcat..."
+                    placeholder="Search by model or manufacturer..."
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     style={{ padding: '8px 14px', borderRadius: 16, border: '1px solid var(--border-subtle)', fontSize: 12, outline: 'none' }}
@@ -1064,22 +1162,25 @@ export default function App() {
                     onChange={(e) => setCategory(e.target.value)}
                   >
                     <option value="All equipment">All equipment</option>
-                    <option value="Heavy Machinery">Heavy Machinery</option>
-                    <option value="Earthmoving">Earthmoving</option>
-                    <option value="Material Handling">Material Handling</option>
-                    <option value="Power & Generation">Power &amp; Generation</option>
+                    {Object.keys(categoriesMap).sort().map((categoryName) => (
+                      <option key={categoryName} value={categoryName}>{categoryName}</option>
+                    ))}
                   </select>
 
                   <div className="price-slider-wrap">
-                    <span>Max: ${maxPrice}/day</span>
+                    <label htmlFor="max-daily-rate">Max price (PHP)/day</label>
                     <input
-                      type="range"
-                      min={100}
-                      max={1200}
-                      step={25}
-                      value={maxPrice}
-                      onChange={(e) => setMaxPrice(Number(e.target.value))}
-                      title="Filter daily rate"
+                      id="max-daily-rate"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={maxPrice ?? ''}
+                      placeholder={String(maximumDailyRate)}
+                      disabled={equipmentList.length === 0}
+                      onChange={(e) =>
+                        setMaxPrice(e.target.value === '' ? null : Number(e.target.value))
+                      }
+                      aria-label="Maximum daily rental price in Philippine pesos"
                     />
                   </div>
                 </div>
@@ -1089,21 +1190,24 @@ export default function App() {
                 {visibleEquipment.map((item) => (
                   <div className="fleet-unit-card" key={item.id}>
                     <div className="fleet-card-img-wrap">
-                      <img src={item.image_url || ''} alt={item.model_name} />
-                      <span className={`fleet-status-pill ${item.current_status}`}>
-                        {item.current_status}
-                      </span>
+                      {item.image_url ? (
+                        <img src={item.image_url} alt={item.model_name} />
+                      ) : (
+                        <div className="fleet-image-placeholder" aria-label="No equipment image available">
+                          {item.model_name.slice(0, 1)}
+                        </div>
+                      )}
                     </div>
 
                     <div className="fleet-card-body">
                       <span className="fleet-cat-badge">
-                        {item.category?.category_name || 'Machinery'}
+                        {item.category?.category_name || 'Uncategorized'}
                       </span>
                       <h4 className="fleet-model-title">{item.model_name}</h4>
 
                       <div className="fleet-card-footer">
                         <div className="fleet-price-text">
-                          ${item.daily_rental_rate} <span>/ day</span>
+                          {formatPHP(item.daily_rental_rate)} <span>/ day</span>
                         </div>
                         <div style={{ display: 'flex', gap: 6 }}>
                           <button
@@ -1123,7 +1227,7 @@ export default function App() {
                               disabled={item.current_status !== 'available'}
                               onClick={() => {
                                 setRentingEquipment(item);
-                                setBookStartDate(new Date().toISOString().split('T')[0]);
+                                setBookStartDate(toDateInputValue(new Date()));
                               }}
                               style={{ opacity: item.current_status === 'available' ? 1 : 0.4 }}
                             >
@@ -1132,15 +1236,18 @@ export default function App() {
                           ) : (
                             <button
                               className="reserve-purple-btn"
-                              onClick={() =>
-                                updateEquipmentStatus(
-                                  item.id,
-                                  item.current_status === 'available' ? 'under_maintenance' : 'available'
-                                ).then(() => {
+                              onClick={async () => {
+                                try {
+                                  await updateEquipmentStatus(
+                                    item.id,
+                                    item.current_status === 'available' ? 'under_maintenance' : 'available'
+                                  );
                                   showToast('Equipment status updated.');
-                                  reloadData();
-                                })
-                              }
+                                  await reloadData();
+                                } catch (error: unknown) {
+                                  showToast(error instanceof Error ? error.message : 'Could not update equipment status.');
+                                }
+                              }}
                             >
                               Toggle State
                             </button>
@@ -1175,7 +1282,7 @@ export default function App() {
                   >
                     {equipmentList.map((eq) => (
                       <option key={eq.id} value={eq.id}>
-                        {eq.model_name} (${eq.daily_rental_rate}/day)
+                        {eq.model_name} ({formatPHP(eq.daily_rental_rate)}/day)
                       </option>
                     ))}
                   </select>
@@ -1185,8 +1292,24 @@ export default function App() {
               {/* Month Header and Legend */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, padding: '0 4px', flexWrap: 'wrap', gap: 10 }}>
                 <h4 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#111827' }}>
-                  October 2026 Schedule &bull; {selectedCalEquip?.model_name || 'Fleet Unit'}
+                  {calendarMonthLabel} &bull; {selectedCalEquip?.model_name || 'Select equipment'}
                 </h4>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="outline-pill-btn"
+                    aria-label="Previous month"
+                    onClick={() => setCalendarMonth(new Date(calendarYear, calendarMonthIndex - 1, 1))}
+                  >
+                    Previous
+                  </button>
+                  <button
+                    className="outline-pill-btn"
+                    aria-label="Next month"
+                    onClick={() => setCalendarMonth(new Date(calendarYear, calendarMonthIndex + 1, 1))}
+                  >
+                    Next
+                  </button>
+                </div>
                 <div style={{ display: 'flex', gap: 14, fontSize: 11, fontWeight: 700 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981' }} />
@@ -1210,40 +1333,35 @@ export default function App() {
 
               {/* Calendar Day Cells */}
               <div className="calendar-grid-days">
-                {[27, 28, 29, 30].map((d) => (
-                  <div key={`prev-${d}`} className="calendar-day-cell other-month">
-                    <span className="day-num" style={{ color: '#9ca3af' }}>{d}</span>
-                  </div>
-                ))}
-
-                {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => {
-                  const dateStr = `2026-10-${day < 10 ? '0' + day : day}`;
+                {calendarDates.map((date) => {
+                  const dateStr = toDateInputValue(date);
                   const isSelected = calSelectedDate === dateStr;
-
-                  const isBooked = orders.some((o) => {
-                    const hasUnit = o.items?.some((it) => it.equipment_id === calEquipId);
-                    if (!hasUnit || o.status === 'cancelled') return false;
-                    return o.expected_start_date <= dateStr && dateStr <= o.expected_end_date;
-                  });
-
-                  const isMaintenance = maintenance.some(
-                    (m) => m.equipment_id === calEquipId && m.maintenance_status !== 'completed' && day % 4 === 0
+                  const isCurrentMonth = date.getMonth() === calendarMonthIndex;
+                  const isBooked = isEquipmentBookedOnDate(calEquipId, dateStr);
+                  const isMaintenance = hasMaintenanceOnDate(calEquipId, dateStr);
+                  const isUnavailable = Boolean(
+                    selectedCalEquip &&
+                      (selectedCalEquip.current_status === 'decommissioned' ||
+                        selectedCalEquip.current_status === 'under_maintenance' ||
+                        (dateStr === todayDate && selectedCalEquip.current_status !== 'available'))
                   );
 
                   return (
                     <div
                       key={dateStr}
-                      className={`calendar-day-cell ${isSelected ? 'selected' : ''}`}
+                      className={`calendar-day-cell ${isCurrentMonth ? '' : 'other-month'} ${isSelected ? 'selected' : ''}`}
                       onClick={() => {
                         setCalSelectedDate(dateStr);
                         setBookStartDate(dateStr);
                       }}
                     >
-                      <span className="day-num">{day}</span>
+                      <span className="day-num">{date.getDate()}</span>
                       {isMaintenance ? (
                         <span className="calendar-chip maintenance">Service</span>
                       ) : isBooked ? (
                         <span className="calendar-chip booked">Rented</span>
+                      ) : isUnavailable ? (
+                        <span className="calendar-chip booked">Unavailable</span>
                       ) : (
                         <span className="calendar-chip available">Open</span>
                       )}
@@ -1260,13 +1378,13 @@ export default function App() {
                       Selected Date: {calSelectedDate} &bull; {selectedCalEquip.model_name}
                     </h5>
                     <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
-                      Daily Rate: <strong>${selectedCalEquip.daily_rental_rate}/day</strong> &bull; Current Status: <strong style={{ color: selectedCalEquip.current_status === 'available' ? '#047857' : '#b45309', textTransform: 'capitalize' }}>{selectedCalEquip.current_status}</strong>
+                      Daily Rate: <strong>{formatPHP(selectedCalEquip.daily_rental_rate)}/day</strong> &bull; Current Status: <strong style={{ color: selectedCalEquip.current_status === 'available' ? '#047857' : '#b45309', textTransform: 'capitalize' }}>{selectedCalEquip.current_status}</strong>
                     </p>
                   </div>
 
                   <button
                     className="primary-purple-btn"
-                    disabled={selectedCalEquip.current_status !== 'available'}
+                    disabled={selectedDateBlocked}
                     onClick={() => {
                       setRentingEquipment(selectedCalEquip);
                       setBookStartDate(calSelectedDate);
@@ -1302,6 +1420,7 @@ export default function App() {
                       <th>START &rarr; END DATE</th>
                       <th>DELIVERY SITE</th>
                       <th>SUBTOTAL</th>
+                      <th>INSURANCE</th>
                       <th>TOTAL DUE</th>
                       <th>STATUS</th>
                     </tr>
@@ -1311,10 +1430,11 @@ export default function App() {
                       <tr key={o.id}>
                         <td><strong>{o.order_number}</strong></td>
                         <td>{o.expected_start_date} &rarr; {o.expected_end_date}</td>
-                        <td>{o.delivery_address || 'Regional Depot'}</td>
-                        <td>${o.subtotal_amount.toFixed(2)}</td>
+                        <td>{o.delivery_address || '—'}</td>
+                        <td>{formatPHP(o.subtotal_amount)}</td>
+                        <td>{formatPHP(o.insurance_amount)}</td>
                         <td style={{ fontWeight: 800, color: 'var(--purple-main)' }}>
-                          ${o.total_amount.toFixed(2)}
+                          {formatPHP(o.total_amount)}
                         </td>
                         <td>
                           <span style={{
@@ -1371,18 +1491,20 @@ export default function App() {
                   </thead>
                   <tbody>
                     {orders.map((ord) => {
-                      const equipName = ord.items?.[0]?.equipment?.model_name || 'Machinery Unit';
+                      const equipName = ord.items?.[0]?.equipment?.model_name || '—';
                       return (
                         <tr key={ord.id}>
                           <td><strong>{ord.order_number}</strong></td>
                           <td>
-                            <div><strong>{ord.customer?.full_name || 'Client'}</strong></div>
-                            <small style={{ color: 'var(--text-muted)' }}>{ord.customer?.phone || 'No phone on file'}</small>
+                            <div><strong>{ord.customer?.full_name || '—'}</strong></div>
+                            <small style={{ color: 'var(--text-muted)' }}>
+                              {ord.customer?.phone ? formatPhilippinePhone(ord.customer.phone) : 'No phone on file'}
+                            </small>
                           </td>
                           <td>{equipName}</td>
                           <td>{ord.expected_start_date} &rarr; {ord.expected_end_date}</td>
                           <td style={{ fontWeight: 800, color: 'var(--purple-main)' }}>
-                            ${ord.total_amount.toFixed(2)}
+                            {formatPHP(ord.total_amount)}
                           </td>
                           <td>
                             <span style={{
@@ -1465,7 +1587,7 @@ export default function App() {
                     {orders.map((ord) => (
                       <tr key={ord.id}>
                         <td><strong>{ord.order_number}</strong></td>
-                        <td>{ord.customer?.full_name || 'Client'}</td>
+                        <td>{ord.customer?.full_name || '—'}</td>
                         <td>{ord.expected_start_date} &rarr; {ord.expected_end_date}</td>
                         <td>
                           <span style={{ padding: '3px 10px', borderRadius: 12, background: '#f3f4f6', color: '#374151', fontSize: 10, fontWeight: 700 }}>
@@ -1520,13 +1642,13 @@ export default function App() {
                     {orders.flatMap((o) => o.items || []).map((item) => (
                       <tr key={item.id}>
                         <td><code>{item.id.slice(0, 8)}</code></td>
-                        <td><strong>{item.equipment?.model_name || 'Takeuchi TL8'}</strong></td>
+                        <td><strong>{item.equipment?.model_name || '—'}</strong></td>
                         <td>
                           <span style={{ padding: '3px 10px', borderRadius: 12, background: 'var(--purple-light)', color: 'var(--purple-main)', fontSize: 10, fontWeight: 700 }}>
                             {item.item_status}
                           </span>
                         </td>
-                        <td>{item.dispatch_odometer_hours || 185} hrs</td>
+                        <td>{item.dispatch_odometer_hours ?? '—'}{item.dispatch_odometer_hours == null ? '' : ' hrs'}</td>
                         <td>
                           {item.item_status === 'dispatched' ? (
                             <button
@@ -1534,7 +1656,12 @@ export default function App() {
                               style={{ padding: '6px 14px', fontSize: 11 }}
                               onClick={() => {
                                 setReturningItemId(item.id);
-                                setReturnOdometer((item.dispatch_odometer_hours || 185) + 24);
+                                setReturnOdometer('');
+                                setReturnFuel('');
+                                setReturnCleanliness('');
+                                setReturnIntegrity('');
+                                setDamageNotes('');
+                                setPenaltyFee('');
                               }}
                             >
                               Conduct Inspection
@@ -1579,10 +1706,10 @@ export default function App() {
                     {maintenance.map((m) => (
                       <tr key={m.id}>
                         <td><strong>{m.work_order_number}</strong></td>
-                        <td>{m.equipment?.model_name || 'Kubota KX040-4'}</td>
+                        <td>{m.equipment?.model_name || '—'}</td>
                         <td>{m.maintenance_type}</td>
                         <td>{m.odometer_hours_at_service} hrs</td>
-                        <td style={{ fontWeight: 800 }}>${m.total_maintenance_cost.toFixed(2)}</td>
+                        <td style={{ fontWeight: 800 }}>{formatPHP(m.total_maintenance_cost)}</td>
                         <td>
                           <span style={{ padding: '3px 10px', borderRadius: 12, background: 'var(--purple-light)', color: 'var(--purple-main)', fontSize: 10, fontWeight: 700 }}>
                             {m.maintenance_status}
@@ -1643,40 +1770,20 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB: DEFENSE LAB */}
+          {/* TAB: DATA INTEGRITY */}
           {activeTab === 'Architectural Defense Lab' && (
             <div className="transactions-table-card" style={{ marginTop: 6 }}>
               <div className="table-card-header">
                 <div>
-                  <h3 className="chart-card-title">Architectural Defense Lab</h3>
+                  <h3 className="chart-card-title">Database Integrity</h3>
                   <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Live resilience benchmarks addressing Page 7 of the course syllabus
+                    Live records are protected by database constraints.
                   </p>
                 </div>
               </div>
-
-              <div style={{ background: '#fafaff', border: '1px solid var(--border-subtle)', borderRadius: 20, padding: 24, marginBottom: 20 }}>
-                <h4 style={{ fontSize: 16, fontWeight: 800, margin: '0 0 8px', color: '#111827' }}>
-                  1. The "What-If" Parent Deletion Stress Test
-                </h4>
-                <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px' }}>
-                  Simulates deleting a parent equipment unit that has child rental items, proving the database catches <code>ON DELETE RESTRICT</code> without throwing an unhandled backend crash.
-                </p>
-                <button className="primary-purple-btn" onClick={testParentDeletionConstraint}>
-                  Run Parent Deletion Stress Test
-                </button>
-              </div>
-
-              {defenseLog && (
-                <div style={{ padding: 18, borderRadius: 16, background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
-                  <h5 style={{ margin: '0 0 6px', color: '#065f46', fontSize: 14, fontWeight: 800 }}>
-                    {defenseLog.title}
-                  </h5>
-                  <pre style={{ margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', fontFamily: 'monospace', color: '#047857' }}>
-                    {defenseLog.detail}
-                  </pre>
-                </div>
-              )}
+              <p style={{ padding: 18, color: 'var(--text-muted)' }}>
+                Equipment linked to rental items cannot be deleted while those records exist. No destructive test is run against your Supabase data.
+              </p>
             </div>
           )}
 
@@ -1685,17 +1792,14 @@ export default function App() {
             <div className="profile-management-grid">
               {/* Left: Summary Avatar Card */}
               <div className="profile-summary-card">
-                <img
-                  src={
-                    currentRole === 'customer'
-                      ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80'
-                      : currentRole === 'staff'
-                      ? 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80'
-                      : 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80'
-                  }
-                  alt={activeUser.full_name}
-                  className="profile-avatar-big"
-                />
+                <div className="profile-avatar-big" aria-hidden="true">
+                  {activeUser.full_name
+                    .split(/\s+/)
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .map((part) => part[0]?.toUpperCase())
+                    .join('')}
+                </div>
                 <h3 style={{ margin: '0 0 4px', fontSize: 18, fontWeight: 800, color: '#111827' }}>
                   {activeUser.full_name}
                 </h3>
@@ -1719,11 +1823,9 @@ export default function App() {
                 <div style={{ width: '100%', borderTop: '1px solid var(--border-subtle)', paddingTop: 16, fontSize: 12, textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: 'var(--text-muted)' }}>Account Status:</span>
-                    <strong style={{ color: '#047857' }}>Active &amp; Verified</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>System Engine:</span>
-                    <strong>Supabase Live</strong>
+                    <strong style={{ color: activeUser.account_status === 'active' ? '#047857' : '#b91c1c' }}>
+                      {activeUser.account_status}
+                    </strong>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: 'var(--text-muted)' }}>Active Orders:</span>
@@ -1769,8 +1871,13 @@ export default function App() {
                       <label>Primary Phone Number</label>
                       <input
                         type="tel"
+                        autoComplete="tel"
+                        inputMode="tel"
+                        maxLength={16}
+                        placeholder="+63 912 345 6789"
                         value={profilePhone}
                         onChange={(e) => setProfilePhone(e.target.value)}
+                        onBlur={() => setProfilePhone((value) => formatPhilippinePhone(value))}
                         required
                       />
                     </div>
@@ -1862,7 +1969,7 @@ export default function App() {
               Reserve {rentingEquipment.model_name}
             </h2>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 20px' }}>
-              ${rentingEquipment.daily_rental_rate}/day &bull; Replacement Value: ${rentingEquipment.replacement_value.toLocaleString()}
+              {formatPHP(rentingEquipment.daily_rental_rate)}/day &bull; Replacement Value: {formatPHP(rentingEquipment.replacement_value)}
             </p>
 
             <form onSubmit={handleBookingSubmit} className="auth-form-finset">
@@ -1884,59 +1991,47 @@ export default function App() {
                     min="1"
                     max="30"
                     value={bookDays}
-                    onChange={(e) => setBookDays(Number(e.target.value))}
+                    onChange={(e) => setBookDays(e.target.value)}
                     required
                   />
                 </div>
               </div>
 
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Customer Contact Phone</label>
-                  <input
-                    type="tel"
-                    value={bookPhone}
-                    onChange={(e) => setBookPhone(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Job Site / Delivery Address</label>
-                  <input
-                    type="text"
-                    value={bookAddress}
-                    onChange={(e) => setBookAddress(e.target.value)}
-                    required
-                  />
-                </div>
+              <div className="form-group">
+                <label>Job Site / Delivery Address</label>
+                <input
+                  type="text"
+                  value={bookAddress}
+                  onChange={(e) => setBookAddress(e.target.value)}
+                  required
+                />
               </div>
 
               <div style={{ background: '#fafaff', border: '1px solid var(--border-subtle)', padding: 16, borderRadius: 16, fontSize: 12, margin: '6px 0 16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
                   <span>Rental Period:</span>
-                  <strong>{bookStartDate} &rarr; {new Date(new Date(bookStartDate).getTime() + bookDays * 86400000).toISOString().split('T')[0]} ({bookDays} days)</strong>
+                  <strong>{bookStartDate} &rarr; {bookStartDate && bookDays ? toDateInputValue(new Date(new Date(`${bookStartDate}T00:00:00`).getTime() + bookingDays * 86400000)) : '—'} ({bookDays || '—'} days)</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
                   <span>Daily Rate:</span>
-                  <strong>${rentingEquipment.daily_rental_rate.toFixed(2)}/day</strong>
+                  <strong>{formatPHP(rentingEquipment.daily_rental_rate)}/day</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
                   <span>Subtotal:</span>
-                  <strong>${(rentingEquipment.daily_rental_rate * bookDays).toFixed(2)}</strong>
+                  <strong>{formatPHP(bookingSubtotal)}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span>State Tax (8%):</span>
-                  <span>${(rentingEquipment.daily_rental_rate * bookDays * 0.08).toFixed(2)}</span>
+                  <span>Insurance:</span>
+                  <span>{bookingInsuranceRate === undefined ? 'Not configured' : formatPHP(bookingInsurance)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span>Security Deposit:</span>
-                  <span>$500.00</span>
+                  <span>Tax (8%):</span>
+                  <span>{formatPHP(bookingTax)}</span>
                 </div>
                 <hr style={{ border: 0, borderTop: '1px solid var(--border-subtle)', margin: '10px 0' }} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 800, color: 'var(--purple-main)' }}>
                   <span>Total Amount:</span>
-                  <span>${(rentingEquipment.daily_rental_rate * bookDays * 1.08 + 500).toFixed(2)}</span>
+                  <span>{formatPHP(bookingSubtotal + bookingInsurance + bookingTax)}</span>
                 </div>
               </div>
 
@@ -1948,7 +2043,7 @@ export default function App() {
                 >
                   Cancel
                 </button>
-                <button type="submit" className="primary-purple-btn">
+                <button type="submit" className="primary-purple-btn" disabled={bookingInsuranceRate === undefined}>
                   Confirm Reservation
                 </button>
               </div>
@@ -1974,21 +2069,40 @@ export default function App() {
                 <input
                   type="number"
                   step="0.5"
+                  min="0"
                   value={returnOdometer}
-                  onChange={(e) => setReturnOdometer(Number(e.target.value))}
+                  onChange={(e) => setReturnOdometer(e.target.value)}
                   required
                 />
               </div>
 
               <div className="form-group">
-                <label>Fuel Level (%) &bull; {returnFuel}%</label>
+                <label>Fuel Level (%)</label>
                 <input
-                  type="range"
+                  type="number"
                   min="0"
                   max="100"
+                  step="1"
                   value={returnFuel}
-                  onChange={(e) => setReturnFuel(Number(e.target.value))}
+                  onChange={(e) => setReturnFuel(e.target.value)}
+                  required
                 />
+              </div>
+
+              <div className="form-group">
+                <label>Cleanliness Rating</label>
+                <select
+                  className="filter-select-pill"
+                  value={returnCleanliness}
+                  onChange={(e) => setReturnCleanliness(e.target.value)}
+                  style={{ width: '100%', padding: '10px 14px' }}
+                  required
+                >
+                  <option value="">Select observed condition</option>
+                  {[1, 2, 3, 4, 5].map((rating) => (
+                    <option key={rating} value={rating}>{rating} / 5</option>
+                  ))}
+                </select>
               </div>
 
               <div className="form-group">
@@ -1996,13 +2110,14 @@ export default function App() {
                 <select
                   className="filter-select-pill"
                   value={returnIntegrity}
-                  onChange={(e) => setReturnIntegrity(Number(e.target.value))}
+                  onChange={(e) => setReturnIntegrity(e.target.value)}
                   style={{ width: '100%', padding: '10px 14px' }}
+                  required
                 >
-                  <option value={5}>5 - Pristine (No damage detected)</option>
-                  <option value={4}>4 - Normal jobsite cosmetic wear</option>
-                  <option value={2}>2 - Damaged (Auto-triggers maintenance work order!)</option>
-                  <option value={1}>1 - Severe damage / breakdown</option>
+                  <option value="">Select observed condition</option>
+                  {[1, 2, 3, 4, 5].map((rating) => (
+                    <option key={rating} value={rating}>{rating} / 5</option>
+                  ))}
                 </select>
               </div>
 
@@ -2012,18 +2127,19 @@ export default function App() {
                   rows={2}
                   value={damageNotes}
                   onChange={(e) => setDamageNotes(e.target.value)}
-                  placeholder="e.g. Hydraulic line leakage, dented frame"
+                  placeholder="Record any damage found during inspection"
                   style={{ width: '100%', padding: '10px 14px', borderRadius: 12, border: '1px solid var(--border-input)', background: '#fafaff' }}
                 />
               </div>
 
               <div className="form-group">
-                <label>Damage Penalty Fee ($)</label>
+                <label>Damage Penalty Fee (PHP)</label>
                 <input
                   type="number"
                   min="0"
+                  step="0.01"
                   value={penaltyFee}
-                  onChange={(e) => setPenaltyFee(Number(e.target.value))}
+                  onChange={(e) => setPenaltyFee(e.target.value)}
                 />
               </div>
 

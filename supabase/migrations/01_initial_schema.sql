@@ -51,12 +51,13 @@ CREATE TYPE inspection_type_enum AS ENUM ('pre_dispatch', 'post_return');
 -- ----------------------------------------------------------------------------
 CREATE TABLE user_profiles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    auth_user_id UUID UNIQUE, -- Nullable to support local seeded test users without mandatory Supabase auth linkage
+    auth_user_id UUID UNIQUE,
     full_name VARCHAR(120) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
     phone VARCHAR(30) NOT NULL,
     company_name VARCHAR(150),
     role user_role_type NOT NULL DEFAULT 'customer',
+    requested_role user_role_type,
     account_status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (account_status IN ('active', 'suspended', 'pending')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -86,7 +87,7 @@ CREATE TABLE equipment_categories (
     category_name VARCHAR(80) NOT NULL UNIQUE,
     category_code VARCHAR(20) NOT NULL UNIQUE,
     description TEXT,
-    base_daily_insurance_rate NUMERIC(10, 2) NOT NULL DEFAULT 25.00 CHECK (base_daily_insurance_rate >= 0),
+    base_daily_insurance_rate NUMERIC(10, 2) NOT NULL CHECK (base_daily_insurance_rate >= 0),
     requires_operator_certification BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -126,6 +127,7 @@ CREATE TABLE rental_orders (
     expected_end_date DATE NOT NULL,
     actual_return_date DATE,
     subtotal_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (subtotal_amount >= 0),
+    insurance_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (insurance_amount >= 0),
     tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (tax_amount >= 0),
     security_deposit_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (security_deposit_amount >= 0),
     total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (total_amount >= 0),

@@ -35,7 +35,7 @@
        };
      }
      ```
-   - **Live UI Demo:** Open the **Admin Dashboard -> "Architectural Defense Lab"** tab and click **"Run Parent Deletion Stress Test"**. The UI demonstrates that the database engine catches the foreign key constraint violation and displays a structured, human-readable alert with 0 unhandled exceptions.
+   - Do not test this by deleting live equipment from the application. Review the foreign-key definition in the migration, or run a deletion test only in a disposable Supabase project with temporary data.
 
 ---
 
@@ -67,17 +67,17 @@
 > *"Explain the exact data lifecycle that occurs between the client trigger, the framework's middleware router, and this server-side database transaction block. Walk me through the variables line-by-line."*
 
 ### Complete Step-by-Step Walkthrough:
-Take the **Equipment Dispatch Workflow** as the primary example:
+Take the **Equipment Dispatch Workflow** as the primary example. The signed-in staff member selects a confirmed rental order loaded from Supabase; the order and user IDs come from live records.
 
 #### 1. Client Trigger (`src/App.tsx`):
-- Staff member Marcus Vance clicks **"Dispatch Units (Run Stored Proc)"** for order `ORD-2026-08101`.
+- A staff member clicks **"Dispatch Units (Run Stored Proc)"** for a confirmed order.
 - The UI triggers:
   ```typescript
-  handleDispatchCheckout(orderId: 'd1000000-0000-0000-0000-000000000001');
+  handleDispatchCheckout(orderId);
   ```
 
-#### 2. Service / Router Layer (`src/services/rentalService.ts`):
-- Function `executeRentalCheckout(orderId, staffId)` passes parameters to the Supabase RPC router:
+#### 2. Supabase Client (`src/lib/supabase.ts`):
+- Function `executeRentalDispatch(orderId, staffId)` passes parameters to Supabase RPC:
   ```typescript
   const { data, error } = await supabase.rpc('sp_process_rental_checkout', {
     p_order_id: orderId,
@@ -97,15 +97,15 @@ Take the **Equipment Dispatch Workflow** as the primary example:
 - **Trigger 1 (`trg_sync_equipment_status`):** When `rental_order_items.item_status` changes to `'dispatched'`, the trigger executes `fn_sync_equipment_rental_status()`, updating `equipment.current_status = 'rented'` automatically at the engine level!
 - **Trigger 2 (`trg_audit_rental_order_items` & `trg_audit_rental_orders`):** Executes `fn_universal_audit_logger()`, taking `OLD` and `NEW` row snapshots, computing changed columns, and inserting an audit record into `audit_logs`.
 
-#### 5. Server Response & UI Refresh:
+#### 5. Database Response & UI Refresh:
 - Stored procedure returns JSON:
   ```json
   {
     "success": true,
-    "order_id": "d1000000-...",
+    "order_id": "<database order id>",
     "new_status": "in_progress",
-    "items_dispatched_count": 1,
-    "dispatched_at": "2026-10-27T14:38:00Z"
+    "items_dispatched_count": "<number of order items>",
+    "dispatched_at": "<database timestamp>"
   }
   ```
 - The React application updates state, re-fetches the synchronized fleet status, and renders the success toast.

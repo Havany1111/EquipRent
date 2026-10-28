@@ -14,6 +14,7 @@ export interface UserProfile {
   phone: string;
   company_name?: string | null;
   role: UserRole;
+  requested_role?: UserRole | null;
   account_status: 'active' | 'suspended' | 'pending';
   created_at: string;
   updated_at: string;
@@ -74,6 +75,7 @@ export interface RentalOrder {
   expected_end_date: string;
   actual_return_date?: string | null;
   subtotal_amount: number;
+  insurance_amount: number;
   tax_amount: number;
   security_deposit_amount: number;
   total_amount: number;

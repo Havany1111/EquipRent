@@ -1,66 +1,38 @@
-# EquipRent: Supabase Cloud Database Quick Setup Guide
+# Supabase Setup
 
-Follow these quick steps to deploy the database onto your Supabase PostgreSQL cluster:
+EquipRent is a React/Vite application that reads live records from Supabase using the public anon/publishable key and Row Level Security. The application does not include demo accounts or seed records.
 
----
+## Configure the app
 
-> **Warning:** `full_schema_setup.sql` drops and recreates the application tables. Run it only for a new/empty project; do not rerun it on a database containing data.
+1. In Supabase, open **Project Settings → API** and copy the project URL and public anon/publishable key.
+2. Copy `.env.example` to `.env.local` in the repository root and set:
 
-## Step 1: Open Supabase SQL Editor
-1. Log in to [https://supabase.com](https://supabase.com) and open your project (or create a new project called **EquipRent**).
-2. In the left navigation sidebar, click on **SQL Editor** (icon looking like `>_` or SQL terminal).
-3. Click **"+ New Query"**.
-
----
-
-## Step 2: Run the All-in-One Master Script
-1. Open the file [`supabase/full_schema_setup.sql`](../supabase/full_schema_setup.sql) located in this repository.
-2. Copy its entire content.
-3. Paste it into the Supabase SQL Editor window.
-4. Click the green **"Run"** button (or press `Ctrl + Enter` / `Cmd + Enter`).
-
-**What this executes in one click:**
-- ✅ Creates all **11 3NF Normalized Tables** (User profiles, Warehouses, Categories, Equipment, Rental Orders, Rental Order Items, Payments, Maintenance Records, Maintenance Tasks, Inspections, Audit Logs).
-- ✅ Binds all **Universal Engine Triggers** (Audit diff logging, Inventory status synchronization, Financial recalculation, Double-booking guards).
-- ✅ Compiles all **PL/pgSQL Stored Procedures & Functions** (`sp_process_rental_checkout`, `sp_process_equipment_return`, `fn_get_fleet_utilization_analytics`).
-- ✅ Deploys all **Abstracted Views & Row Level Security (RLS)** for Admin, Staff, and Customer tiers.
-- ✅ Populates realistic **Seed Data & Fixtures**.
-
-After the master script succeeds, run [`supabase/fix_auth_and_seed_users.sql`](../supabase/fix_auth_and_seed_users.sql) in the SQL Editor to configure secure Auth-to-profile linking. It does not create Auth users; Supabase manages those records.
-
-If you created demo Auth users with the older setup script and sign-in now reports **"Database error querying schema"**, run the updated fix script again. It repairs the missing Auth token fields on those three demo accounts.
-
-## Step 3: Create Auth users through Supabase
-1. In the Supabase dashboard, go to **Authentication -> Users -> Add user**.
-2. Create users with the seeded profile email addresses:
-   - `admin@equiprent.com`
-   - `marcus.tech@equiprent.com`
-   - `jordan.miller@buildcorp.com`
-3. Set a password for each account and confirm the email.
-
-The database trigger links each Auth user to its seeded profile by email, retaining the seeded admin, staff, and customer roles. If you previously created these demo users by running an older version of `fix_auth_and_seed_users.sql`, delete those demo Auth users in the dashboard and recreate them here. Do not delete the `user_profiles` rows.
-
-The quick-fill buttons only fill the account email; enter the password you set in the dashboard. New self-service registrations receive the customer role. Assign staff/admin roles only to trusted accounts from the Supabase SQL Editor.
-
----
-
-## Step 4: Connect Your Application via `.env`
-1. In your Supabase dashboard, go to **Project Settings** (gear icon on the bottom left) -> **API**.
-2. Find:
-   - **Project URL** (e.g. `https://xyzabcdefg.supabase.co`)
-   - **Project API Keys** -> `anon` / `public` key
-3. In the root directory of this project, create a file named `.env` (or copy `.env.example` to `.env`):
    ```env
-   VITE_SUPABASE_URL=https://xyzabcdefg.supabase.co
-   VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+   VITE_SUPABASE_URL=https://your-project-id.supabase.co
+   VITE_SUPABASE_ANON_KEY=your-public-anon-or-publishable-key
    ```
-4. Save the `.env` file.
 
----
+3. Restart the Vite development server after changing environment variables. Do not put a database password or service-role key in the browser app.
 
-## Step 5: Verify Deployment
-1. The development server will hot-reload (or run `npm run dev`).
-2. Notice the top status bar in the web app:
-   - It will switch from yellow to:  
-     `🟢 Supabase PostgreSQL Cloud: Connected`
-3. Try booking equipment or dispatching a unit — your Supabase database will execute the server-side stored procedures and triggers in real time!
+## Set up a new, empty Supabase project
+
+1. Run `supabase/full_schema_setup.sql` in the Supabase SQL Editor. It creates the schema, triggers, stored procedures, views, and RLS policies without inserting records.
+2. Run `supabase/auth_profile_setup.sql` to configure the Auth-to-profile trigger, role requests, and profile access policies.
+3. Create an account through EquipRent or Supabase Auth. Self-service signups receive the customer role. An authorized administrator can assign staff/admin roles to trusted profiles.
+4. Add real categories, warehouses, equipment, and other operational records through the app or Supabase.
+
+> **Warning:** `full_schema_setup.sql` drops and recreates the application tables. Use it only for a new/empty project. Never rerun it on a database containing data.
+
+## Existing Supabase project
+
+Do not run the destructive full-schema script on an existing project. Apply `supabase/migrations/06_order_insurance_totals.sql` and `supabase/migrations/07_signup_role_requests.sql` in the SQL Editor. The first adds insurance totals; the second adds a signup role-request field and updates the auth profile trigger. Existing records are not deleted by these migrations.
+
+## Auth and permissions
+
+The database trigger creates a customer profile when a new Auth user registers. Signup can record a requested Staff/Admin role, but the account always remains a Customer until an authorized administrator approves and changes the role. Review pending requests in `user_profiles.requested_role`; assign approved roles using the Supabase SQL Editor and clear the request afterward. The trigger uses signup metadata for the person's name and phone and does not invent a phone number or company. Create and confirm accounts through Supabase Auth; do not insert directly into Supabase-managed `auth.users`.
+
+The first account is a customer by design. Staff/admin role changes should only be performed by an authorized administrator. Do not grant elevated roles to untrusted users.
+
+## Existing records
+
+Removing the fixture SQL prevents future setup runs from inserting sample rows; it does not delete records already stored in your Supabase project. Review and remove any unwanted existing records directly in Supabase only after confirming they are not real business data.
